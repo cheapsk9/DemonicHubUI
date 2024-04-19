@@ -241,16 +241,16 @@ local function main()
 		ModalCopyBox.Visible = false
 		ModalContainer.Visible = true
 	end)
-
+local PandaAuth = loadstring(game:HttpGet('https://raw.githubusercontent.com/Panda-Repositories/PandaKS_Libraries/main/library/LuaLib/ROBLOX/PandaBetaLib.lua'))()
 	GUI.Window.Login.MainContent.Right.LoginMain.LoginBox.CopyKeyLink.MouseButton1Click:Connect(function()
 		if setclipboard then
-			setclipboard(KEY_LINK)
+			setclipboard(PandaAuth:GetKey(ServiceID))
 		elseif toclipboard then
-			toclipboard(KEY_LINK)
+			toclipboard(PandaAuth:GetKey(ServiceID))
 		elseif Clipboard and Clipboard.set then
-			Clipboard.set(KEY_LINK)
+			Clipboard.set(PandaAuth:GetKey(ServiceID))
 		elseif CopyString then
-			CopyString(KEY_LINK)
+			CopyString(PandaAuth:GetKey(ServiceID))
 		else
 			isClosing = false
 			ModalTitleText.Text = "Copy Not Supported"
