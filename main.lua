@@ -10,44 +10,22 @@ local GuiOfChoice
 local function main()
 	local GuiSize = Vector2.new(800, 480)
 	local Cam = workspace.CurrentCamera
-	local GUI = script:WaitForChild("DemonicHub_Gui")
+	local Screen = script:WaitForChild("DemonicHub")
+	local Renderer = Screen.DemonicHub_Renderer
+	local GUI = Renderer.DemonicHub_Gui
 	local ModalContainer = GUI.Window.ModalContainer
 	local ModalTitleText = ModalContainer.Modal.TitleText
 	local ModalBodyText = ModalContainer.Modal.BodyText
 	local ModalCancelButton = ModalContainer.Modal.Buttons.Cancel
 	local ModalCopyBox = ModalBodyText.KeyLinkBox
-	local Screen = script:WaitForChild("DemonicHub_ScreenElements")
 	local Pos = Screen.HubPosition
 	local TaskButton = Screen.MinimizedTask
 	local TweenService = game:GetService("TweenService")
 	script.Parent = nil
 
-	local Part = Instance.new("Part")
-	Part.FormFactor = Enum.FormFactor.Custom
-	Part.Size = Vector3.new(0.2, 0.2, 0.2)
-	Part.Anchored = true
-	Part.Locked = true
-	Part.CanCollide = false
-	Part.Material = Enum.Material.SmoothPlastic
-	Part.CanTouch = false
-	Part.CanQuery = false
-	Part.CastShadow = false
-	Part.Massless = true
-	Part.Transparency = 1
-	Part.Name = "DemonicHub_Renderer"
-	
 	local cleanupHub
-	
-	local SG = nil
-	local function IsSG(Obj)
-		if Obj:IsA("ScreenGui") then
-			SG = Obj
-		elseif Obj then
-			IsSG(Obj.Parent)
-		end
-	end
-	IsSG(Pos)
-	
+
+
 	local GuiRenderEvent = game:GetService("RunService").RenderStepped:connect(function()
 		local RCF = Cam:GetRenderCFrame()
 		local AngleFrame = RCF:toObjectSpace(CFrame.new(RCF.p)):inverse()
@@ -60,29 +38,32 @@ local function main()
 			Screen.AbsoluteSize.Y/2 + (Pos.AbsolutePosition.Y + Pos.AbsoluteSize.Y/2 - Screen.AbsoluteSize.Y/2) * 5,
 			0
 		)
-		
-		Part.Size = Vector3.new((BottomRightRay.Origin - BottomLeftRay.Origin).Magnitude, (TopLeftRay.Origin - BottomLeftRay.Origin).Magnitude, 0) * 5
-		Part.CFrame = CFrame.new(MidRay.Origin) * AngleFrame * CFrame.new(0,0,-0.4005)
 
-		if not Pos.Parent or not Part.Parent or not SG.Parent then
+		Renderer.Size = Vector3.new((BottomRightRay.Origin - BottomLeftRay.Origin).Magnitude, (TopLeftRay.Origin - BottomLeftRay.Origin).Magnitude, 0) * 5
+		Renderer.CFrame = CFrame.new(MidRay.Origin) * AngleFrame * CFrame.new(0,0,-0.4005)
+
+		if not Pos.Parent or not Renderer.Parent or not GUI.Parent or not Screen.Parent then
 			cleanupHub()
 		end
 	end)
 
-	Part.Parent = GuiOfChoice
-	GUI.Parent = Part
 	Screen.Parent = GuiOfChoice
-	
-	
+
+
 	--Ugly (but beautiful) hack - allows you to interact with non-AlwaysOnTop GUIs.
-	local AotUnsetEvent = game:GetService("RunService").RenderStepped:Connect(function()
+	local OnTopUnsetEvent = game:GetService("RunService").PreRender:Connect(function()
 		GUI.AlwaysOnTop = false
 	end)
-	local AotSetEvent = game:GetService("RunService").Heartbeat:Connect(function()
-		GUI.AlwaysOnTop = true
-	end)
+	--On mobile, asset loading is processed slightly after PreRender during the input period, so we can get away with using it as a timer here.
+	local function SetOnTop()
+		if GUI then
+			GUI.AlwaysOnTop = true
+		end
+		game:GetService("ContentProvider"):PreloadAsync({"rbxasset://"}, SetOnTop)
+	end
+	coroutine.wrap(SetOnTop)()
 
-	
+
 	-- Define tweens
 	local guiFullTween = TweenService:Create(Pos, TweenInfo.new(0.2, Enum.EasingStyle.Quint), {Size = UDim2.fromOffset(GuiSize.X, GuiSize.Y)})
 	local guiHalfTween = TweenService:Create(Pos, TweenInfo.new(0.2, Enum.EasingStyle.Quint), {Size = UDim2.fromOffset(GuiSize.X/2, GuiSize.Y/2)})
@@ -92,23 +73,30 @@ local function main()
 	local canvasFullTween = TweenService:Create(GUI, TweenInfo.new(1), {CanvasSize = GuiSize})
 	local canvasMinTween = TweenService:Create(GUI, TweenInfo.new(1), {CanvasSize = Vector2.zero})
 
-	
+
 	-- Define more variables
 	local isDraggingGui = false
 	local isDraggingTask = false
 	local isWindowSmall = false
 	local prevGuiPos
-	
-	local lastMousePos = Vector2.zero
+
+	local initMousePos = Vector2.zero
 
 	local taskClickIntent = false
 	local isClosing = false
-	
+
+	local lastGuiPos
+	local lastTaskPos
+
+	local dragInputObject
+
+	local isInitDragInput = false
+
 	if Screen.AbsoluteSize.X < GuiSize.X or Screen.AbsoluteSize.Y < GuiSize.Y then
 		isWindowSmall = true
 	end
-	
-	
+
+
 	-- Tween in Pos for intro anim
 	Pos.Size = UDim2.new()
 	GUI.CanvasSize = Vector2.zero
@@ -118,41 +106,61 @@ local function main()
 		guiEnterFullTween:Play()
 	end
 	canvasFullTween:Play()
-	
-	
+
+
 	ModalCopyBox.Text = KEY_LINK
-	
-	local InputChangedEvent = game:GetService("UserInputService").InputChanged:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement then
+
+	local InputBeganEvent = game:GetService("UserInputService").InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			if not isInitDragInput then
+				initMousePos = input.Position
+				dragInputObject = input
+			end
 			if isDraggingGui then
-				Pos.Position = Pos.Position - UDim2.fromOffset(lastMousePos.X - input.Position.X, lastMousePos.Y - input.Position.Y)
+				-- lock drag input ref so it can't change
+				if input.UserInputType == Enum.UserInputType.Touch then
+					isInitDragInput = true
+				end
+			end
+		end
+	end)
+
+	local InputChangedEvent = game:GetService("UserInputService").InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or (input.UserInputType == Enum.UserInputType.Touch and input == dragInputObject)
+		then
+			if isDraggingGui then
+				Pos.Position = lastGuiPos + UDim2.fromOffset(input.Position.X - initMousePos.X, input.Position.Y - initMousePos.Y)
 			elseif isDraggingTask then
-				TaskButton.Position = TaskButton.Position - UDim2.fromOffset(lastMousePos.X - input.Position.X, lastMousePos.Y - input.Position.Y)
+				TaskButton.Position = lastTaskPos + UDim2.fromOffset(input.Position.X - initMousePos.X, input.Position.Y - initMousePos.Y)
 				taskClickIntent = false
 			end
-			lastMousePos = input.Position
 		end
 	end)
 
 	local InputEndedEvent = game:GetService("UserInputService").InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or (input.UserInputType == Enum.UserInputType.Touch and input == dragInputObject)
+		then
 			isDraggingGui = false
 			isDraggingTask = false
+			-- unlock drag input ref
+			if input == dragInputObject then
+				isInitDragInput = false
+			end
 		end
 	end)
 
-	GUI.Window.TopBar.WindowGrip.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 then
-			isDraggingGui = true
-		end
+	GUI.Window.TopBar.WindowGrip.MouseButton1Down:Connect(function(input)
+		lastGuiPos = Pos.Position
+		isDraggingGui = true
 	end)
-	GUI.Window.TopBar.WindowGrip.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 then
-			isDraggingGui = false
-		end
+	GUI.Window.TopBar.WindowGrip.MouseButton1Up:Connect(function(input)
+		isDraggingGui = false
 	end)
 
 	TaskButton.MouseButton1Down:Connect(function(input)
+		lastTaskPos = TaskButton.Position
 		isDraggingTask = true
 		taskClickIntent = true
 	end)
@@ -169,6 +177,17 @@ local function main()
 			end
 			canvasFullTween:Play()
 		end
+	end)
+	TaskButton.TouchTap:Connect(function()
+		TaskButton.Visible = false
+		Pos.Position = UDim2.fromOffset(TaskButton.AbsolutePosition.X + TaskButton.AbsoluteSize.X/2, TaskButton.AbsolutePosition.Y + TaskButton.AbsoluteSize.Y/2)
+		TweenService:Create(Pos, TweenInfo.new(1), {Position = prevGuiPos}):Play()
+		if isWindowSmall then
+			guiHalfTween:Play()
+		else
+			guiFullTween:Play()
+		end
+		canvasFullTween:Play()
 	end)
 
 	GUI.Window.TopBar.WindowControls.Maximize.MouseButton1Click:Connect(function()
@@ -222,7 +241,7 @@ local function main()
 		ModalCopyBox.Visible = false
 		ModalContainer.Visible = true
 	end)
-	
+
 	GUI.Window.Login.MainContent.Right.LoginMain.LoginBox.CopyKeyLink.MouseButton1Click:Connect(function()
 		if setclipboard then
 			setclipboard(KEY_LINK)
@@ -243,7 +262,7 @@ You can select the following text below and copy it:
 			ModalContainer.Visible = true
 		end
 	end)
-	
+
 	local CursorChangedSignal = ModalCopyBox:GetPropertyChangedSignal("CursorPosition")
 	ModalCopyBox.Focused:Connect(function()
 		ModalCopyBox.SelectionStart = 0
@@ -251,14 +270,13 @@ You can select the following text below and copy it:
 		CursorChangedSignal:Wait()
 		ModalCopyBox.CursorPosition = #ModalCopyBox.Text + 1
 	end)
-	
-	
+
+
 	cleanupHub = function()
 		GuiRenderEvent:Disconnect()
 		InputChangedEvent:Disconnect()
 		InputEndedEvent:Disconnect()
-		AotUnsetEvent:Disconnect()
-		AotSetEvent:Disconnect()
+		OnTopUnsetEvent:Disconnect()
 		guiFullTween:Destroy()
 		guiHalfTween:Destroy()
 		guiEnterFullTween:Destroy()
@@ -266,9 +284,10 @@ You can select the following text below and copy it:
 		guiExitTween:Destroy()
 		canvasFullTween:Destroy()
 		canvasMinTween:Destroy()
-		Part:Destroy()
+		GUI:Destroy()
+		Renderer:Destroy()
 		Screen:Destroy()
-		KEY_LINK, DISCORD_INVITE, GuiOfChoice, GuiSize, Cam, GUI, ModalContainer, ModalTitleText, ModalBodyText, ModalCancelButton, ModalCopyBox, Screen, Pos, TaskButton, TweenService, Part, Screen, SG, GuiRenderEvent, InputChangedEvent, InputEndedEvent, AotUnsetEvent, AotSetEvent, guiFullTween, guiHalfTween, guiEnterFullTween, guiEnterHalfTween, guiExitTween, canvasFullTween, canvasMinTween, isDraggingGui, isDraggingTask, isWindowSmall, prevGuiPos, lastMousePos, taskClickIntent, isClosing, CursorChangedSignal, cleanupHub, IsSG, main = nil
+		KEY_LINK, DISCORD_INVITE, GuiOfChoice, GuiSize, Cam, GUI, ModalContainer, ModalTitleText, ModalBodyText, ModalCancelButton, ModalCopyBox, Screen, Pos, TaskButton, TweenService, Renderer, Screen, GuiRenderEvent, InputChangedEvent, InputEndedEvent, OnTopUnsetEvent, SetOnTop, guiFullTween, guiHalfTween, guiEnterFullTween, guiEnterHalfTween, guiExitTween, canvasFullTween, canvasMinTween, isDraggingGui, isDraggingTask, isWindowSmall, prevGuiPos, initMousePos, taskClickIntent, isClosing, lastGuiPos, lastTaskPos, dragInputObject, isInitDragInput, CursorChangedSignal, cleanupHub, main = nil
 		script:Destroy()
 		script.Disabled = true
 		script = nil
@@ -319,4187 +338,6 @@ end end,
             {
                 Children = {
                     {
-                        Children = {
-                            {
-                                Children = {
-                                    {
-                                        Children = {
-                                            {
-                                                Properties = {
-                                                    Color = Color3.new(1, 1, 1),
-                                                    Transparency = 0.949999988079071
-                                                },
-                                                Reference = 53,
-                                                ClassName = "UIStroke"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0, 1)
-                                                                },
-                                                                Reference = 51,
-                                                                ClassName = "UICorner"
-                                                            },
-                                                            {
-                                                                Properties = {
-                                                                    Color = Color3.new(1, 1, 1),
-                                                                    Transparency = 0.5,
-                                                                    ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-                                                                },
-                                                                Reference = 52,
-                                                                ClassName = "UIStroke"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Visible = false,
-                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
-                                                            TextTransparency = 0.5,
-                                                            TextSize = 14,
-                                                            TextEditable = false,
-                                                            ClipsDescendants = true,
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Text = "Example text. Blah blah.",
-                                                            Name = "KeyLinkBox",
-                                                            Size = UDim2.new(1, 0, 0, 14),
-                                                            TextColor3 = Color3.new(0.3333333432674408, 0.3333333432674408, 0.3333333432674408),
-                                                            BackgroundTransparency = 0.800000011920929,
-                                                            TextXAlignment = Enum.TextXAlignment.Left,
-                                                            Position = UDim2.new(0, 0, 0, 53),
-                                                            ClearTextOnFocus = false,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(0, 0, 0)
-                                                        },
-                                                        Reference = 50,
-                                                        ClassName = "TextBox"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
-                                                    TextColor3 = Color3.new(1, 1, 1),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Text = "Body text. Lorem ipsum blah blah...",
-                                                    Name = "BodyText",
-                                                    Size = UDim2.new(0, 343, 0, 92),
-                                                    Position = UDim2.new(0.07432320713996887, 0, 0.3026311695575714, 0),
-                                                    BackgroundTransparency = 1,
-                                                    TextXAlignment = Enum.TextXAlignment.Left,
-                                                    BorderSizePixel = 0,
-                                                    TextWrapped = true,
-                                                    TextSize = 14,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 49,
-                                                ClassName = "TextLabel"
-                                            },
-                                            {
-                                                Reference = 47,
-                                                ClassName = "UICorner"
-                                            },
-                                            {
-                                                Properties = {
-                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
-                                                    TextColor3 = Color3.new(1, 1, 1),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Text = "Title Text",
-                                                    Name = "TitleText",
-                                                    BackgroundTransparency = 1,
-                                                    Position = UDim2.new(0.2636815905570984, 0, 0.07017543911933899, 0),
-                                                    Size = UDim2.new(0, 200, 0, 50),
-                                                    BorderSizePixel = 0,
-                                                    TextSize = 32,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 48,
-                                                ClassName = "TextLabel"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    Thickness = 3,
-                                                                    Transparency = 0.5
-                                                                },
-                                                                Reference = 57,
-                                                                ClassName = "UIStroke"
-                                                            },
-                                                            {
-                                                                Reference = 56,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, -11, 0, -11),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(1, 8, 1, 8),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 55,
-                                                        ClassName = "Frame"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    Visible = false,
-                                                    ClipsDescendants = true,
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    BackgroundTransparency = 1,
-                                                    Position = UDim2.new(0, 8, 0, 8),
-                                                    Name = "ShadowClip",
-                                                    Size = UDim2.new(1, -5, 1, -5),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 54,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Reference = 60,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            LayoutOrder = 1,
-                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
-                                                            TextColor3 = Color3.new(1, 1, 1),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Text = "Cancel",
-                                                            AnchorPoint = Vector2.new(1, 0),
-                                                            Name = "Cancel",
-                                                            BackgroundTransparency = 0.8999999761581421,
-                                                            Position = UDim2.new(1, 0, 0, 0),
-                                                            Size = UDim2.new(0, 100, 0, 42),
-                                                            BorderSizePixel = 0,
-                                                            TextSize = 14,
-                                                            BackgroundColor3 = Color3.new(1, 0, 0.5333333611488342)
-                                                        },
-                                                        Reference = 59,
-                                                        ClassName = "TextButton"
-                                                    },
-                                                    {
-                                                        Properties = {
-                                                            SortOrder = Enum.SortOrder.LayoutOrder,
-                                                            Padding = UDim.new(0, 20),
-                                                            HorizontalAlignment = Enum.HorizontalAlignment.Center,
-                                                            FillDirection = Enum.FillDirection.Horizontal
-                                                        },
-                                                        Reference = 63,
-                                                        ClassName = "UIListLayout"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Reference = 62,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
-                                                            TextColor3 = Color3.new(1, 1, 1),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Text = "OK",
-                                                            BackgroundTransparency = 0.8999999761581421,
-                                                            Name = "OK",
-                                                            Size = UDim2.new(0, 100, 0, 42),
-                                                            BorderSizePixel = 0,
-                                                            TextSize = 14,
-                                                            BackgroundColor3 = Color3.new(1, 0, 0.5333333611488342)
-                                                        },
-                                                        Reference = 61,
-                                                        ClassName = "TextButton"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    AnchorPoint = Vector2.new(0.5, 0),
-                                                    Name = "Buttons",
-                                                    BackgroundTransparency = 1,
-                                                    Position = UDim2.new(0.5, 0, 0.7220000028610229, 0),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 220, 0, 42),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 58,
-                                                ClassName = "Frame"
-                                            }
-                                        },
-                                        Properties = {
-                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                            Name = "Modal",
-                                            BackgroundTransparency = 0.2000000029802322,
-                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                            BorderColor3 = Color3.new(0, 0, 0),
-                                            Size = UDim2.new(0, 400, 0, 225),
-                                            BorderSizePixel = 0,
-                                            BackgroundColor3 = Color3.new(0.1490196138620377, 0.01568627543747425, 0.05882353335618973)
-                                        },
-                                        Reference = 46,
-                                        ClassName = "Frame"
-                                    },
-                                    {
-                                        Reference = 45,
-                                        ClassName = "UICorner"
-                                    }
-                                },
-                                Properties = {
-                                    Visible = false,
-                                    BorderColor3 = Color3.new(0, 0, 0),
-                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                    Name = "ModalContainer",
-                                    BackgroundTransparency = 0.4000000059604645,
-                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                    Size = UDim2.new(1, 0, 1, 0),
-                                    ZIndex = 3,
-                                    BorderSizePixel = 0,
-                                    BackgroundColor3 = Color3.new(0, 0, 0)
-                                },
-                                Reference = 44,
-                                ClassName = "Frame"
-                            },
-                            {
-                                Children = {
-                                    {
-                                        Children = {
-                                            {
-                                                Properties = {
-                                                    ScaleType = Enum.ScaleType.Tile,
-                                                    ImageTransparency = 0.9929999709129333,
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Name = "Checker1",
-                                                    Image = "rbxasset://textures/blockUpperLeft.png",
-                                                    TileSize = UDim2.new(0, 46, 0, 46),
-                                                    Size = UDim2.new(1, 0, 0, 69),
-                                                    ResampleMode = Enum.ResamplerMode.Pixelated,
-                                                    BackgroundTransparency = 1,
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 6,
-                                                ClassName = "ImageLabel"
-                                            },
-                                            {
-                                                Properties = {
-                                                    ScaleType = Enum.ScaleType.Tile,
-                                                    ImageTransparency = 0.9929999709129333,
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Name = "Checker2",
-                                                    Size = UDim2.new(1, -23, 0, 23),
-                                                    Image = "rbxasset://textures/blockUpperLeft.png",
-                                                    TileSize = UDim2.new(0, 46, 0, 46),
-                                                    Position = UDim2.new(0, 23, 0, 23),
-                                                    ResampleMode = Enum.ResamplerMode.Pixelated,
-                                                    BackgroundTransparency = 1,
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 7,
-                                                ClassName = "ImageLabel"
-                                            }
-                                        },
-                                        Properties = {
-                                            Name = "CheckerboardContainer",
-                                            Size = UDim2.new(1, 0, 0, 70),
-                                            BackgroundTransparency = 1,
-                                            Position = UDim2.new(0, 0, 0, 1),
-                                            BorderColor3 = Color3.new(0, 0, 0),
-                                            ZIndex = -10,
-                                            BorderSizePixel = 0,
-                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                        },
-                                        Reference = 5,
-                                        ClassName = "Frame"
-                                    },
-                                    {
-                                        Children = {
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Rotation = 90,
-                                                                            Transparency = NumberSequence.new({
-                                                                                NumberSequenceKeypoint.new(0, 1, 0),
-                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
-                                                                                NumberSequenceKeypoint.new(1, 1, 0)
-                                                                            }),
-                                                                            Color = ColorSequence.new({
-                                                                                ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
-                                                                                ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
-                                                                                ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
-                                                                            })
-                                                                        },
-                                                                        Reference = 27,
-                                                                        ClassName = "UIGradient"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Thickness = 20,
-                                                                    Name = "Shadow",
-                                                                    Color = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 26,
-                                                                ClassName = "UIStroke"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                            SizeConstraint = Enum.SizeConstraint.RelativeYY,
-                                                            Name = "Highlight",
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 25,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Reference = 20,
-                                                        ClassName = "UICorner"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0, 4)
-                                                                },
-                                                                Reference = 23,
-                                                                ClassName = "UICorner"
-                                                            },
-                                                            {
-                                                                Properties = {
-                                                                    Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
-                                                                    Thickness = 2
-                                                                },
-                                                                Reference = 24,
-                                                                ClassName = "UIStroke"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 16, 0, 16),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                        },
-                                                        Reference = 22,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Properties = {
-                                                            Color = Color3.new(1, 1, 1),
-                                                            Transparency = 0.949999988079071
-                                                        },
-                                                        Reference = 21,
-                                                        ClassName = "UIStroke"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    LayoutOrder = 1,
-                                                    Name = "Maximize",
-                                                    BackgroundTransparency = 0.800000011920929,
-                                                    ClipsDescendants = true,
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 30, 0, 30),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(0.2313725501298904, 0.2313725501298904, 0.2313725501298904)
-                                                },
-                                                Reference = 19,
-                                                ClassName = "ImageButton"
-                                            },
-                                            {
-                                                Properties = {
-                                                    Padding = UDim.new(0, 5),
-                                                    SortOrder = Enum.SortOrder.LayoutOrder,
-                                                    FillDirection = Enum.FillDirection.Horizontal
-                                                },
-                                                Reference = 10,
-                                                ClassName = "UIListLayout"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Reference = 29,
-                                                        ClassName = "UICorner"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0, 4)
-                                                                },
-                                                                Reference = 32,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                            Size = UDim2.new(0, 22, 0, 2),
-                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Rotation = 45,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.3137255012989044, 0.4392156898975372)
-                                                        },
-                                                        Reference = 31,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Rotation = 90,
-                                                                            Transparency = NumberSequence.new({
-                                                                                NumberSequenceKeypoint.new(0, 1, 0),
-                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
-                                                                                NumberSequenceKeypoint.new(1, 1, 0)
-                                                                            }),
-                                                                            Color = ColorSequence.new({
-                                                                                ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
-                                                                                ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
-                                                                                ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
-                                                                            })
-                                                                        },
-                                                                        Reference = 37,
-                                                                        ClassName = "UIGradient"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Thickness = 20,
-                                                                    Name = "Shadow",
-                                                                    Color = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 36,
-                                                                ClassName = "UIStroke"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                            SizeConstraint = Enum.SizeConstraint.RelativeYY,
-                                                            Name = "Highlight",
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 35,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0, 4)
-                                                                },
-                                                                Reference = 34,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                            Size = UDim2.new(0, 22, 0, 2),
-                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Rotation = -45,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.3137255012989044, 0.4392156898975372)
-                                                        },
-                                                        Reference = 33,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Properties = {
-                                                            Color = Color3.new(1, 0.2392157018184662, 0.2392157018184662),
-                                                            Transparency = 0.8500000238418579
-                                                        },
-                                                        Reference = 30,
-                                                        ClassName = "UIStroke"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    LayoutOrder = 2,
-                                                    Name = "Close",
-                                                    BackgroundTransparency = 0.5,
-                                                    ClipsDescendants = true,
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 30, 0, 30),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(0.2313725501298904, 0.1333333402872086, 0.1607843190431595)
-                                                },
-                                                Reference = 28,
-                                                ClassName = "ImageButton"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Properties = {
-                                                            Color = Color3.new(1, 1, 1),
-                                                            Transparency = 0.949999988079071
-                                                        },
-                                                        Reference = 13,
-                                                        ClassName = "UIStroke"
-                                                    },
-                                                    {
-                                                        Reference = 12,
-                                                        ClassName = "UICorner"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0, 4)
-                                                                },
-                                                                Reference = 15,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                            Size = UDim2.new(0, 22, 0, 2),
-                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Rotation = -45,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                        },
-                                                        Reference = 14,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Rotation = 90,
-                                                                            Transparency = NumberSequence.new({
-                                                                                NumberSequenceKeypoint.new(0, 1, 0),
-                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
-                                                                                NumberSequenceKeypoint.new(1, 1, 0)
-                                                                            }),
-                                                                            Color = ColorSequence.new({
-                                                                                ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
-                                                                                ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
-                                                                                ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
-                                                                            })
-                                                                        },
-                                                                        Reference = 18,
-                                                                        ClassName = "UIGradient"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Thickness = 20,
-                                                                    Name = "Shadow",
-                                                                    Color = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 17,
-                                                                ClassName = "UIStroke"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                            SizeConstraint = Enum.SizeConstraint.RelativeYY,
-                                                            Name = "Highlight",
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 16,
-                                                        ClassName = "Frame"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    Name = "Minimize",
-                                                    BackgroundTransparency = 0.800000011920929,
-                                                    ClipsDescendants = true,
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 30, 0, 30),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(0.2313725501298904, 0.2313725501298904, 0.2313725501298904)
-                                                },
-                                                Reference = 11,
-                                                ClassName = "ImageButton"
-                                            }
-                                        },
-                                        Properties = {
-                                            BorderColor3 = Color3.new(0, 0, 0),
-                                            AnchorPoint = Vector2.new(1, 0),
-                                            Name = "WindowControls",
-                                            BackgroundTransparency = 1,
-                                            Position = UDim2.new(1, -10, 0, 10),
-                                            Size = UDim2.new(0, 100, 0, 30),
-                                            ZIndex = 2,
-                                            BorderSizePixel = 0,
-                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                        },
-                                        Reference = 9,
-                                        ClassName = "Frame"
-                                    },
-                                    {
-                                        Properties = {
-                                            Name = "WindowGrip",
-                                            BackgroundTransparency = 1,
-                                            ClipsDescendants = true,
-                                            BorderColor3 = Color3.new(0, 0, 0),
-                                            Size = UDim2.new(1, 0, 0, 70),
-                                            BorderSizePixel = 0,
-                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                        },
-                                        Reference = 8,
-                                        ClassName = "Frame"
-                                    },
-                                    {
-                                        Children = {
-                                            {
-                                                Properties = {
-                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
-                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Text = "<b>Demonic</b> Hub",
-                                                    Name = "Title",
-                                                    Size = UDim2.new(0, 160, 0, 50),
-                                                    Position = UDim2.new(0, 60, 0, 0),
-                                                    BackgroundTransparency = 1,
-                                                    TextXAlignment = Enum.TextXAlignment.Left,
-                                                    BorderSizePixel = 0,
-                                                    RichText = true,
-                                                    TextSize = 24,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 42,
-                                                ClassName = "TextLabel"
-                                            },
-                                            {
-                                                Properties = {
-                                                    Image = "rbxassetid://16755289922",
-                                                    BackgroundTransparency = 1,
-                                                    Name = "Logo",
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 60, 0, 60),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 43,
-                                                ClassName = "ImageLabel"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Reference = 41,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
-                                                            TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Text = "V2",
-                                                            Name = "V2Label",
-                                                            BackgroundTransparency = 0.75,
-                                                            Position = UDim2.new(0, 0, 0, 10),
-                                                            Size = UDim2.new(0, 40, 0, 30),
-                                                            BorderSizePixel = 0,
-                                                            TextSize = 24,
-                                                            BackgroundColor3 = Color3.new(0, 0, 0)
-                                                        },
-                                                        Reference = 40,
-                                                        ClassName = "TextLabel"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    Name = "V2LabelContainer",
-                                                    BackgroundTransparency = 1,
-                                                    Position = UDim2.new(0, 220, 0, 0),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 40, 0, 50),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 39,
-                                                ClassName = "Frame"
-                                            }
-                                        },
-                                        Properties = {
-                                            Name = "LogoTitle",
-                                            BackgroundTransparency = 1,
-                                            Size = UDim2.new(1, 0, 0, 60),
-                                            BorderColor3 = Color3.new(0, 0, 0),
-                                            ZIndex = 2,
-                                            BorderSizePixel = 0,
-                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                        },
-                                        Reference = 38,
-                                        ClassName = "Frame"
-                                    }
-                                },
-                                Properties = {
-                                    BorderColor3 = Color3.new(0, 0, 0),
-                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                    Name = "TopBar",
-                                    BackgroundTransparency = 1,
-                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                    Size = UDim2.new(1, 0, 1, 0),
-                                    ZIndex = 2,
-                                    BorderSizePixel = 0,
-                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                },
-                                Reference = 4,
-                                ClassName = "Frame"
-                            },
-                            {
-                                Children = {
-                                    {
-                                        Children = {
-                                            {
-                                                Properties = {
-                                                    Name = "Barrier1",
-                                                    Position = UDim2.new(0.5, 0, 0, 0),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 84, 0, 60),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                },
-                                                Reference = 137,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Reference = 66,
-                                                ClassName = "UICorner"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0, 50)
-                                                                },
-                                                                Reference = 219,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Line1",
-                                                            Position = UDim2.new(-0.01647376641631126, 0, 0.7522173523902893, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 360, 0, 360),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(0.9176470637321472, 0.9176470637321472, 0.9176470637321472)
-                                                        },
-                                                        Reference = 218,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(1, 0)
-                                                                },
-                                                                Reference = 217,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Rotation = 90,
-                                                            Name = "Line2",
-                                                            Position = UDim2.new(0.1945109665393829, 0, 0.566730797290802, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 225, 0, 100),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(0.9176470637321472, 0.9176470637321472, 0.9176470637321472)
-                                                        },
-                                                        Reference = 216,
-                                                        ClassName = "Frame"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Name = "Mountains",
-                                                    Rotation = 45,
-                                                    Size = UDim2.new(0, 600, 0, 340),
-                                                    BackgroundTransparency = 1,
-                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                                    ZIndex = -1,
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 215,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    Color = Color3.new(0.5960784554481506, 0.5960784554481506, 0.5960784554481506),
-                                                                                    Thickness = 12
-                                                                                },
-                                                                                Reference = 99,
-                                                                                ClassName = "UIStroke"
-                                                                            },
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 98,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(1, 0),
-                                                                            Size = UDim2.new(2, 0, 1, 0),
-                                                                            BackgroundTransparency = 1,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Position = UDim2.new(1, -12, 0, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 97,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Name = "ClippingRegion_Special",
-                                                                    BackgroundTransparency = 1,
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 96,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment2_Special",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0, 120),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 84, 0, 120),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 95,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 103,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            BackgroundTransparency = 0.5,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(2, -6, 1, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                                        },
-                                                                        Reference = 102,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                    Name = "ClippingRegion",
-                                                                    Size = UDim2.new(1, 12, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 101,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment3",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 0, 0, 240),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 60, 0, 120),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 100,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 107,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            BackgroundTransparency = 0.5,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(2, -6, 2, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                                        },
-                                                                        Reference = 106,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                    Name = "ClippingRegion",
-                                                                    Size = UDim2.new(1, 12, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 105,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment5",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 0, 0, 480),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 60, 0, 60),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 104,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 111,
-                                                                                ClassName = "UICorner"
-                                                                            },
-                                                                            {
-                                                                                Properties = {
-                                                                                    Color = Color3.new(0.5960784554481506, 0.5960784554481506, 0.5960784554481506),
-                                                                                    Thickness = 12
-                                                                                },
-                                                                                Reference = 112,
-                                                                                ClassName = "UIStroke"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(1, 0),
-                                                                            Size = UDim2.new(2, 0, 1, 0),
-                                                                            BackgroundTransparency = 1,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Position = UDim2.new(1, -12, 0, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 110,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Name = "ClippingRegion_Special",
-                                                                    BackgroundTransparency = 1,
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 109,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment4_Special",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0, 360),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 84, 0, 120),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 108,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 94,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(0, 1),
-                                                                            BackgroundTransparency = 0.5,
-                                                                            Position = UDim2.new(0, 0, 1, 0),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(2, -6, 2, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                                        },
-                                                                        Reference = 93,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                    Name = "ClippingRegion",
-                                                                    Size = UDim2.new(1, 12, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 92,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment1",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 0, 0, 60),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 60, 0, 60),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 91,
-                                                        ClassName = "Frame"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                                    Name = "MiddleJoinsContainer2",
-                                                    BackgroundTransparency = 1,
-                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                    Size = UDim2.new(0, 120, 0, 600),
-                                                    ZIndex = 2,
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 90,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 130,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            BackgroundTransparency = 0.5,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(2, -12, 2, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                                        },
-                                                                        Reference = 129,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                    Name = "ClippingRegion",
-                                                                    Size = UDim2.new(1, 24, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 128,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment5",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 0, 0, 480),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 60, 0, 60),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 127,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 121,
-                                                                                ClassName = "UICorner"
-                                                                            },
-                                                                            {
-                                                                                Properties = {
-                                                                                    Color = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177),
-                                                                                    Thickness = 25
-                                                                                },
-                                                                                Reference = 122,
-                                                                                ClassName = "UIStroke"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(1, 0),
-                                                                            Size = UDim2.new(2, 0, 1, 0),
-                                                                            BackgroundTransparency = 1,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Position = UDim2.new(1, 0, 0, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 120,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Name = "ClippingRegion_Special",
-                                                                    BackgroundTransparency = 1,
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 119,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment2_End",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0, 120),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 84, 0, 120),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 118,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 117,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(0, 1),
-                                                                            BackgroundTransparency = 0.5,
-                                                                            Position = UDim2.new(0, 0, 1, 0),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(2, -12, 2, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                                        },
-                                                                        Reference = 116,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                    Name = "ClippingRegion",
-                                                                    Size = UDim2.new(1, 24, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 115,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment1",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 0, 0, 60),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 60, 0, 60),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 114,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 134,
-                                                                                ClassName = "UICorner"
-                                                                            },
-                                                                            {
-                                                                                Properties = {
-                                                                                    Color = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177),
-                                                                                    Thickness = 25
-                                                                                },
-                                                                                Reference = 135,
-                                                                                ClassName = "UIStroke"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(1, 0),
-                                                                            Size = UDim2.new(2, 0, 1, 0),
-                                                                            BackgroundTransparency = 1,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Position = UDim2.new(1, 0, 0, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 133,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Name = "ClippingRegion_Special",
-                                                                    BackgroundTransparency = 1,
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 132,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment4_End",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0, 360),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 84, 0, 120),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 131,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 126,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            BackgroundTransparency = 0.5,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(2, -12, 1, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                                        },
-                                                                        Reference = 125,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                    Name = "ClippingRegion",
-                                                                    Size = UDim2.new(1, 24, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 124,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment3",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 0, 0, 240),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 60, 0, 120),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 123,
-                                                        ClassName = "Frame"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                                    Name = "MiddleJoinsContainer3",
-                                                    BackgroundTransparency = 1,
-                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                    Size = UDim2.new(0, 120, 0, 600),
-                                                    ZIndex = 3,
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 113,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Properties = {
-                                                    AnchorPoint = Vector2.new(0, 0.5),
-                                                    Name = "Barrier3",
-                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 84, 0, 120),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                },
-                                                Reference = 139,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 168,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 26, 0, 13),
-                                                            Name = "LavaRockPart",
-                                                            Position = UDim2.new(0.2750000059604645, 0, 0.7399479150772095, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 167,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Properties = {
-                                                            Name = "PillarPart",
-                                                            Position = UDim2.new(0.1687500029802322, 0, 0.4041666686534882, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 70, 0, 12),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 166,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Name = "Smoothing",
-                                                                            CornerRadius = UDim.new(0, 1)
-                                                                        },
-                                                                        Reference = 148,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Rotation = 20,
-                                                                    Position = UDim2.new(0.4199999868869781, 0, 0.2020833343267441, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 100, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
-                                                                },
-                                                                Reference = 147,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Name = "Smoothing",
-                                                                            CornerRadius = UDim.new(0, 1)
-                                                                        },
-                                                                        Reference = 146,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Rotation = 20,
-                                                                    Position = UDim2.new(0.3537499904632568, 0, 0.3604166805744171, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 100, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
-                                                                },
-                                                                Reference = 145,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Name = "Smoothing",
-                                                                            CornerRadius = UDim.new(0, 1)
-                                                                        },
-                                                                        Reference = 156,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Rotation = 40,
-                                                                    Name = "Island",
-                                                                    Position = UDim2.new(0.04849612340331078, 0, 0.5146617293357849, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 100, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
-                                                                },
-                                                                Reference = 155,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Name = "Smoothing",
-                                                                            CornerRadius = UDim.new(0, 1)
-                                                                        },
-                                                                        Reference = 154,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Rotation = 20,
-                                                                    Position = UDim2.new(0.4787499904632568, 0, 0.5083333253860474, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 100, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
-                                                                },
-                                                                Reference = 153,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Name = "Smoothing",
-                                                                            CornerRadius = UDim.new(0, 1)
-                                                                        },
-                                                                        Reference = 152,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Rotation = 20,
-                                                                    Position = UDim2.new(0.4199999868869781, 0, 0.487500011920929, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 100, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
-                                                                },
-                                                                Reference = 151,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Name = "Smoothing",
-                                                                            CornerRadius = UDim.new(0, 1)
-                                                                        },
-                                                                        Reference = 144,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Rotation = 20,
-                                                                    Position = UDim2.new(0.2949999868869781, 0, 0.4666666686534882, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 100, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
-                                                                },
-                                                                Reference = 143,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            Name = "Smoothing",
-                                                                            CornerRadius = UDim.new(0, 1)
-                                                                        },
-                                                                        Reference = 150,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Rotation = -20,
-                                                                    Position = UDim2.new(0.4625000059604645, 0, 0.2583333253860474, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 100, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
-                                                                },
-                                                                Reference = 149,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Rotation = -6,
-                                                            Name = "Volcano",
-                                                            BackgroundTransparency = 1,
-                                                            Size = UDim2.new(1, 0, 1, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 0,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 142,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    Name = "Line",
-                                                                    Position = UDim2.new(0, 10, 0, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 10, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.7058823704719543, 0.7058823704719543)
-                                                                },
-                                                                Reference = 181,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Properties = {
-                                                                    Name = "Line",
-                                                                    Position = UDim2.new(0, 30, 0, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 10, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.7058823704719543, 0.7058823704719543)
-                                                                },
-                                                                Reference = 182,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "PillarPart",
-                                                            Position = UDim2.new(0.1812500059604645, 0, 0.4291666746139526, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 50, 0, 100),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(0.8196079134941101, 0.8196079134941101, 0.8196079134941101)
-                                                        },
-                                                        Reference = 180,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 177,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 26, 0, 9),
-                                                            Name = "LavaRockPart",
-                                                            Position = UDim2.new(0.2829744815826416, 0, 0.7243335247039795, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 176,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    Name = "Smoothing",
-                                                                    CornerRadius = UDim.new(0, 1)
-                                                                },
-                                                                Reference = 165,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Rotation = 8,
-                                                            Name = "Lava",
-                                                            Position = UDim2.new(0.4768529534339905, 0, 0.2056959122419357, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 10, 0, 100),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 164,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                        },
-                                                                        Reference = 193,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Position = UDim2.new(0.3149999976158142, 0, 0.3321523070335388, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 6, 0, 27),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
-                                                                },
-                                                                Reference = 192,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                        },
-                                                                        Reference = 195,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Position = UDim2.new(0.3650000095367432, 0, 0.3321523070335388, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 6, 0, 26),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
-                                                                },
-                                                                Reference = 194,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                        },
-                                                                        Reference = 197,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Position = UDim2.new(0.3400000035762787, 0, 0.3770833313465118, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 6, 0, 100),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
-                                                                },
-                                                                Reference = 196,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                        },
-                                                                        Reference = 191,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Position = UDim2.new(0.3400000035762787, 0, 0.3092356324195862, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 6, 0, 38),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
-                                                                },
-                                                                Reference = 190,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                        },
-                                                                        Reference = 189,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Position = UDim2.new(0.3149999976158142, 0, 0.3770833313465118, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(0, 46, 0, 6),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
-                                                                },
-                                                                Reference = 188,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Rotation = -7,
-                                                            Name = "Pitchfork",
-                                                            BackgroundTransparency = 0.9900000095367432,
-                                                            Position = UDim2.new(0.05750000104308128, 0, 0.3354166746139526, 0),
-                                                            Size = UDim2.new(1, 0, 1, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 187,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    Name = "Smoothing",
-                                                                    CornerRadius = UDim.new(0, 1)
-                                                                },
-                                                                Reference = 163,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Rotation = -17,
-                                                            Name = "Lava",
-                                                            Position = UDim2.new(0.4946741461753845, 0, 0.2934430539608002, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 10, 0, 87),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 162,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 184,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 36, 0, 17),
-                                                            Name = "LavaRockPart",
-                                                            Position = UDim2.new(0.294016033411026, 0, 0.7191287279129028, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 183,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 170,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 75, 0, 36),
-                                                            Name = "LavaRockPart",
-                                                            Position = UDim2.new(0.166250005364418, 0, 0.8625668883323669, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 169,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 175,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 35, 0, 19),
-                                                            Name = "LavaRockPart",
-                                                            Position = UDim2.new(0.4524999856948853, 0, 0.8030250668525696, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 174,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    Name = "Smoothing",
-                                                                    CornerRadius = UDim.new(0, 1)
-                                                                },
-                                                                Reference = 161,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Rotation = -6,
-                                                            Name = "Lava",
-                                                            Position = UDim2.new(0.4679740071296692, 0, 0.4559817016124725, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 10, 0, 137),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 160,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 800, 0, 160),
-                                                            Name = "Ground",
-                                                            Position = UDim2.new(0, 0, 0.6625000238418579, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 2,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(0.4745098352432251, 0.4745098352432251, 0.4745098352432251)
-                                                        },
-                                                        Reference = 157,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 179,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 53, 0, 19),
-                                                            Name = "LavaRockPart",
-                                                            Position = UDim2.new(0.1337500065565109, 0, 0.8479834198951721, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 178,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    Name = "Smoothing",
-                                                                    CornerRadius = UDim.new(0, 1)
-                                                                },
-                                                                Reference = 159,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Rotation = 25,
-                                                            Name = "Lava",
-                                                            Position = UDim2.new(0.4221741557121277, 0, 0.5288597345352173, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 10, 0, 87),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 158,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 209,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            Size = UDim2.new(0, 6, 0, 6),
-                                                                            Name = "Eye",
-                                                                            Position = UDim2.new(0, 2, 0, 0),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            ZIndex = 2,
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.5960784554481506, 0.5960784554481506, 0.5960784554481506)
-                                                                        },
-                                                                        Reference = 208,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 211,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            Size = UDim2.new(0, 6, 0, 6),
-                                                                            Name = "Eye",
-                                                                            Position = UDim2.new(0.5, 2, 0, 0),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            ZIndex = 2,
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.5960784554481506, 0.5960784554481506, 0.5960784554481506)
-                                                                        },
-                                                                        Reference = 210,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 203,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            Position = UDim2.new(0, 7, 0, 0),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(0, 6, 1.399999976158142, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 202,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 205,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            Position = UDim2.new(0, 13, 0, 0),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(0, 6, 1.399999976158142, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 204,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Properties = {
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(1, 0, 0.5, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 212,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Properties = {
-                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                        },
-                                                                        Reference = 201,
-                                                                        ClassName = "UICorner"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 207,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            Position = UDim2.new(0, 19, 0, 0),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(0, 6, 1.399999976158142, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 206,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Position = UDim2.new(0, 0, 0.5, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(1, 0, 0.5, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 200,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 199,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 30, 0, 30),
-                                                            Name = "Skull",
-                                                            Position = UDim2.new(0.5, 0, 0.75, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 198,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 214,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 53, 0, 28),
-                                                            Name = "LavaRockPart",
-                                                            Position = UDim2.new(0.1174999997019768, 0, 0.8798016905784607, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 213,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 186,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 75, 0, 36),
-                                                            Name = "LavaRockPart",
-                                                            Position = UDim2.new(0.15625, 0, 0.8373774290084839, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 185,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                },
-                                                                Reference = 172,
-                                                                ClassName = "UICorner"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Size = UDim2.new(0, 36, 0, 17),
-                                                            Name = "LavaRockPart",
-                                                            Position = UDim2.new(0.2989233732223511, 0, 0.7314901351928711, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            ZIndex = 3,
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
-                                                        },
-                                                        Reference = 171,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Properties = {
-                                                            Name = "PillarPart",
-                                                            Position = UDim2.new(0.1687500029802322, 0, 0.637499988079071, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 70, 0, 12),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(0.9019608497619629, 0.9019608497619629, 0.9019608497619629)
-                                                        },
-                                                        Reference = 173,
-                                                        ClassName = "Frame"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    Name = "DemonicBg",
-                                                    BackgroundTransparency = 1,
-                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    ZIndex = 0,
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 141,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Properties = {
-                                                    AnchorPoint = Vector2.new(1, 0),
-                                                    Name = "BarrierRight",
-                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0.5, -84, 1, 0),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                },
-                                                Reference = 140,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Properties = {
-                                                    Rotation = -90,
-                                                    Name = "LoginDemonic",
-                                                    Color = ColorSequence.new({
-                                                        ColorSequenceKeypoint.new(0, Color3.new(0.294117659330368, 0, 0.2000000029802322)),
-                                                        ColorSequenceKeypoint.new(1, Color3.new(0.294117659330368, 0.1215686276555061, 0))
-                                                    })
-                                                },
-                                                Reference = 136,
-                                                ClassName = "UIGradient"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 84,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(2, 0, 2, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                                        },
-                                                                        Reference = 83,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                    Name = "ClippingRegion",
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 82,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment5",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 0, 0, 480),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 60, 0, 60),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 81,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 71,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(0, 1),
-                                                                            Position = UDim2.new(0, 0, 1, 0),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(2, 0, 2, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                                        },
-                                                                        Reference = 70,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                    Name = "ClippingRegion",
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 69,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment1",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 0, 0, 60),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 60, 0, 60),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 68,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 80,
-                                                                                ClassName = "UICorner"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(2, 0, 1, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                                        },
-                                                                        Reference = 79,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                    Name = "ClippingRegion",
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 78,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment3",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 0, 0, 240),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 60, 0, 120),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 77,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 88,
-                                                                                ClassName = "UICorner"
-                                                                            },
-                                                                            {
-                                                                                Properties = {
-                                                                                    Color = Color3.new(0.800000011920929, 0.800000011920929, 0.800000011920929),
-                                                                                    Thickness = 12
-                                                                                },
-                                                                                Reference = 89,
-                                                                                ClassName = "UIStroke"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(1, 0),
-                                                                            Size = UDim2.new(2, 0, 1, 0),
-                                                                            BackgroundTransparency = 1,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Position = UDim2.new(1, -12, 0, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 87,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Name = "ClippingRegion_Special",
-                                                                    BackgroundTransparency = 1,
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 86,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment4_Special",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0, 360),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 72, 0, 120),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 85,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                },
-                                                                                Reference = 75,
-                                                                                ClassName = "UICorner"
-                                                                            },
-                                                                            {
-                                                                                Properties = {
-                                                                                    Color = Color3.new(0.800000011920929, 0.800000011920929, 0.800000011920929),
-                                                                                    Thickness = 12
-                                                                                },
-                                                                                Reference = 76,
-                                                                                ClassName = "UIStroke"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(1, 0),
-                                                                            Size = UDim2.new(2, 0, 1, 0),
-                                                                            BackgroundTransparency = 1,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Position = UDim2.new(1, -12, 0, 0),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 74,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Name = "ClippingRegion_Special",
-                                                                    BackgroundTransparency = 1,
-                                                                    ClipsDescendants = true,
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 73,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Segment2_Special",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.5, 0, 0, 120),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 72, 0, 120),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 72,
-                                                        ClassName = "Frame"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                                    Name = "MiddleJoinsContainer1",
-                                                    BackgroundTransparency = 1,
-                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 120, 0, 600),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 67,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Properties = {
-                                                    AnchorPoint = Vector2.new(0, 1),
-                                                    Name = "Barrier5",
-                                                    Position = UDim2.new(0.5, 0, 1, 0),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0, 84, 0, 60),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
-                                                },
-                                                Reference = 138,
-                                                ClassName = "Frame"
-                                            }
-                                        },
-                                        Properties = {
-                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                            Size = UDim2.new(0, 800, 0, 480),
-                                            Name = "Background",
-                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                            BorderColor3 = Color3.new(0, 0, 0),
-                                            ZIndex = 0,
-                                            BorderSizePixel = 0,
-                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                        },
-                                        Reference = 65,
-                                        ClassName = "CanvasGroup"
-                                    },
-                                    {
-                                        Children = {
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Children = {
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 275,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
-                                                                                                            Position = UDim2.new(1, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 274,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                                                    Name = "SpearRightClip",
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 273,
-                                                                                                ClassName = "Frame"
-                                                                                            },
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 272,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
-                                                                                                            Position = UDim2.new(0, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 271,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    Name = "SpearLeftClip",
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 270,
-                                                                                                ClassName = "Frame"
-                                                                                            }
-                                                                                        },
-                                                                                        Properties = {
-                                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                                            Size = UDim2.new(0, 6, 0, 6),
-                                                                                            BackgroundTransparency = 1,
-                                                                                            ClipsDescendants = true,
-                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                            BorderSizePixel = 0,
-                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                        },
-                                                                                        Reference = 269,
-                                                                                        ClassName = "Frame"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 1),
-                                                                                    Name = "CenterPillarTop",
-                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 2, 0, 6),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                },
-                                                                                Reference = 268,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                            Name = "PillarLeft1",
-                                                                            Position = UDim2.new(0.5, -16, 1, 2),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(0, 2, 0, 60),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                        },
-                                                                        Reference = 267,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
-                                                                                            Thickness = 2
-                                                                                        },
-                                                                                        Reference = 228,
-                                                                                        ClassName = "UIStroke"
-                                                                                    },
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                                        },
-                                                                                        Reference = 229,
-                                                                                        ClassName = "UICorner"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 0),
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Position = UDim2.new(1, 0, 0, 2),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 200, 0, 200),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 227,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            Name = "GateTopClipLeftBottom",
-                                                                            Size = UDim2.new(0, 37, 0, 10),
-                                                                            BackgroundTransparency = 1,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Position = UDim2.new(0, 0, 0, 36),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 226,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Children = {
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 281,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
-                                                                                                            Position = UDim2.new(0, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 280,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    Name = "SpearLeftClip",
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 279,
-                                                                                                ClassName = "Frame"
-                                                                                            },
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 284,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
-                                                                                                            Position = UDim2.new(1, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 283,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                                                    Name = "SpearRightClip",
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 282,
-                                                                                                ClassName = "Frame"
-                                                                                            }
-                                                                                        },
-                                                                                        Properties = {
-                                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                                            Size = UDim2.new(0, 6, 0, 6),
-                                                                                            BackgroundTransparency = 1,
-                                                                                            ClipsDescendants = true,
-                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                            BorderSizePixel = 0,
-                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                        },
-                                                                                        Reference = 278,
-                                                                                        ClassName = "Frame"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 1),
-                                                                                    Name = "CenterPillarTop",
-                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 2, 0, 6),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                },
-                                                                                Reference = 277,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                            Name = "PillarLeft2",
-                                                                            Position = UDim2.new(0.5, -32, 1, 6),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(0, 2, 0, 60),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                        },
-                                                                        Reference = 276,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
-                                                                                            Thickness = 2
-                                                                                        },
-                                                                                        Reference = 240,
-                                                                                        ClassName = "UIStroke"
-                                                                                    },
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                                        },
-                                                                                        Reference = 241,
-                                                                                        ClassName = "UICorner"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 0),
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Position = UDim2.new(0, 0, 0, 2),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 200, 0, 200),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 239,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            AnchorPoint = Vector2.new(1, 0),
-                                                                            BackgroundTransparency = 1,
-                                                                            Position = UDim2.new(1, 0, 0, 26),
-                                                                            Name = "GateTopClipRightTop",
-                                                                            Size = UDim2.new(0, 37, 0, 10),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 238,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Children = {
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 299,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
-                                                                                                            Position = UDim2.new(0, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 298,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    Name = "SpearLeftClip",
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 297,
-                                                                                                ClassName = "Frame"
-                                                                                            },
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 302,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
-                                                                                                            Position = UDim2.new(1, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 301,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                                                    Name = "SpearRightClip",
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 300,
-                                                                                                ClassName = "Frame"
-                                                                                            }
-                                                                                        },
-                                                                                        Properties = {
-                                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                                            Size = UDim2.new(0, 6, 0, 6),
-                                                                                            BackgroundTransparency = 1,
-                                                                                            ClipsDescendants = true,
-                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                            BorderSizePixel = 0,
-                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                        },
-                                                                                        Reference = 296,
-                                                                                        ClassName = "Frame"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 1),
-                                                                                    Name = "CenterPillarTop",
-                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 2, 0, 6),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                },
-                                                                                Reference = 295,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                            Name = "PillarRight2",
-                                                                            Position = UDim2.new(0.5, 32, 1, 6),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(0, 2, 0, 60),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                        },
-                                                                        Reference = 294,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
-                                                                                            Thickness = 2
-                                                                                        },
-                                                                                        Reference = 232,
-                                                                                        ClassName = "UIStroke"
-                                                                                    },
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                                        },
-                                                                                        Reference = 233,
-                                                                                        ClassName = "UICorner"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 0),
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Position = UDim2.new(1, 0, 0, 2),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 200, 0, 200),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 231,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            Name = "GateTopClipLeftTop",
-                                                                            Size = UDim2.new(0, 37, 0, 10),
-                                                                            BackgroundTransparency = 1,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Position = UDim2.new(0, 0, 0, 26),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 230,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Children = {
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 290,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
-                                                                                                            Position = UDim2.new(0, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 289,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    Name = "SpearLeftClip",
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 288,
-                                                                                                ClassName = "Frame"
-                                                                                            },
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 293,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
-                                                                                                            Position = UDim2.new(1, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 292,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                                                    Name = "SpearRightClip",
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 291,
-                                                                                                ClassName = "Frame"
-                                                                                            }
-                                                                                        },
-                                                                                        Properties = {
-                                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                                            Size = UDim2.new(0, 6, 0, 6),
-                                                                                            BackgroundTransparency = 1,
-                                                                                            ClipsDescendants = true,
-                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                            BorderSizePixel = 0,
-                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                        },
-                                                                                        Reference = 287,
-                                                                                        ClassName = "Frame"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 1),
-                                                                                    Name = "CenterPillarTop",
-                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 2, 0, 6),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                },
-                                                                                Reference = 286,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                            Name = "PillarRight1",
-                                                                            Position = UDim2.new(0.5, 16, 1, 2),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(0, 2, 0, 60),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                        },
-                                                                        Reference = 285,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
-                                                                                            Thickness = 2
-                                                                                        },
-                                                                                        Reference = 236,
-                                                                                        ClassName = "UIStroke"
-                                                                                    },
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            CornerRadius = UDim.new(0.5, 0)
-                                                                                        },
-                                                                                        Reference = 237,
-                                                                                        ClassName = "UICorner"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 0),
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Position = UDim2.new(0, 0, 0, 2),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 200, 0, 200),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 235,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            AnchorPoint = Vector2.new(1, 0),
-                                                                            BackgroundTransparency = 1,
-                                                                            Position = UDim2.new(1, 0, 0, 36),
-                                                                            Name = "GateTopClipRightBottom",
-                                                                            Size = UDim2.new(0, 37, 0, 10),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 234,
-                                                                        ClassName = "Frame"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            CornerRadius = UDim.new(0, 2)
-                                                                                        },
-                                                                                        Reference = 264,
-                                                                                        ClassName = "UICorner"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    Name = "Top",
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(1, 0, 0, 26),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                },
-                                                                                Reference = 263,
-                                                                                ClassName = "Frame"
-                                                                            },
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            CornerRadius = UDim.new(0, 2)
-                                                                                        },
-                                                                                        Reference = 266,
-                                                                                        ClassName = "UICorner"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0, 1),
-                                                                                    Name = "Bottom",
-                                                                                    Position = UDim2.new(0, 0, 1, 0),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(1, 0, 0, 26),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                },
-                                                                                Reference = 265,
-                                                                                ClassName = "Frame"
-                                                                            },
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Children = {
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 250,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
-                                                                                                            Position = UDim2.new(1, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 249,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    AnchorPoint = Vector2.new(1, 0),
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                                                                    Name = "SpearRightClip",
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 248,
-                                                                                                ClassName = "Frame"
-                                                                                            },
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 247,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
-                                                                                                            Position = UDim2.new(0, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 15, 0, 15),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                                        },
-                                                                                                        Reference = 246,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    Name = "SpearLeftClip",
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    Size = UDim2.new(0, 3, 0, 6),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 245,
-                                                                                                ClassName = "Frame"
-                                                                                            }
-                                                                                        },
-                                                                                        Properties = {
-                                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                                            Size = UDim2.new(0, 6, 0, 6),
-                                                                                            BackgroundTransparency = 1,
-                                                                                            ClipsDescendants = true,
-                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                            BorderSizePixel = 0,
-                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                        },
-                                                                                        Reference = 244,
-                                                                                        ClassName = "Frame"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 1),
-                                                                                    Name = "CenterPillarTop",
-                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 2, 0, 6),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
-                                                                                },
-                                                                                Reference = 243,
-                                                                                ClassName = "Frame"
-                                                                            },
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Children = {
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 258,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            },
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
-                                                                                                                    Thickness = 3
-                                                                                                                },
-                                                                                                                Reference = 257,
-                                                                                                                ClassName = "UIStroke"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(0.5, 0),
-                                                                                                            BackgroundTransparency = 1,
-                                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 4, 0, 4),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                        },
-                                                                                                        Reference = 256,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    Name = "KeyHoleClip1",
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    Size = UDim2.new(1, 0, 0, 3),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 255,
-                                                                                                ClassName = "Frame"
-                                                                                            },
-                                                                                            {
-                                                                                                Properties = {
-                                                                                                    Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
-                                                                                                    Thickness = 2
-                                                                                                },
-                                                                                                Reference = 254,
-                                                                                                ClassName = "UIStroke"
-                                                                                            },
-                                                                                            {
-                                                                                                Children = {
-                                                                                                    {
-                                                                                                        Children = {
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
-                                                                                                                    Thickness = 4
-                                                                                                                },
-                                                                                                                Reference = 261,
-                                                                                                                ClassName = "UIStroke"
-                                                                                                            },
-                                                                                                            {
-                                                                                                                Properties = {
-                                                                                                                    CornerRadius = UDim.new(0.5, 0)
-                                                                                                                },
-                                                                                                                Reference = 262,
-                                                                                                                ClassName = "UICorner"
-                                                                                                            }
-                                                                                                        },
-                                                                                                        Properties = {
-                                                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                                                            BackgroundTransparency = 1,
-                                                                                                            Position = UDim2.new(0.5, 0, 1, 0),
-                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                            Size = UDim2.new(0, 2, 0, 7),
-                                                                                                            BorderSizePixel = 0,
-                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                        },
-                                                                                                        Reference = 260,
-                                                                                                        ClassName = "Frame"
-                                                                                                    }
-                                                                                                },
-                                                                                                Properties = {
-                                                                                                    Name = "KeyHoleClip2",
-                                                                                                    Size = UDim2.new(1, 0, 0, 5),
-                                                                                                    BackgroundTransparency = 1,
-                                                                                                    ClipsDescendants = true,
-                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                                    Position = UDim2.new(0, 0, 0, 3),
-                                                                                                    BorderSizePixel = 0,
-                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                                },
-                                                                                                Reference = 259,
-                                                                                                ClassName = "Frame"
-                                                                                            }
-                                                                                        },
-                                                                                        Properties = {
-                                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                                                            BackgroundTransparency = 1,
-                                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                            Size = UDim2.new(0, 8, 0, 8),
-                                                                                            BorderSizePixel = 0,
-                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                        },
-                                                                                        Reference = 253,
-                                                                                        ClassName = "Frame"
-                                                                                    },
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            CornerRadius = UDim.new(0, 2)
-                                                                                        },
-                                                                                        Reference = 252,
-                                                                                        ClassName = "UICorner"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                                                                    Name = "Lock",
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(0, 10, 0, 10),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 251,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            AnchorPoint = Vector2.new(0.5, 1),
-                                                                            Name = "PillarCenterBig",
-                                                                            BackgroundTransparency = 1,
-                                                                            Position = UDim2.new(0.5, 0, 1, 0),
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(0, 6, 0, 60),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 242,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    Name = "Offset",
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(0, 0, 0, -6),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 225,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            Name = "Hell gates icon",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0.300000011920929, 0, 0, 110),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 80, 0, 80),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 224,
-                                                        ClassName = "Frame"
-                                                    },
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Properties = {
-                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
-                                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Text = "to continue to Demonic Hub",
-                                                                    AnchorPoint = Vector2.new(0.5, 0),
-                                                                    Name = "PageSubtitle",
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(0.5, 0, 1, -20),
-                                                                    Size = UDim2.new(0, 200, 0, 50),
-                                                                    BorderSizePixel = 0,
-                                                                    TextSize = 16,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 223,
-                                                                ClassName = "TextLabel"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
-                                                            TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Text = "Log in",
-                                                            Name = "PageTitle",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(0, 60, 0.4000000059604645, 0),
-                                                            Size = UDim2.new(0, 200, 0, 50),
-                                                            BorderSizePixel = 0,
-                                                            TextSize = 32,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 222,
-                                                        ClassName = "TextLabel"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    BackgroundTransparency = 1,
-                                                    Name = "Left",
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0.5, 0, 1, 0),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 221,
-                                                ClassName = "Frame"
-                                            },
-                                            {
-                                                Children = {
-                                                    {
-                                                        Children = {
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Reference = 306,
-                                                                        ClassName = "UICorner"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                                                    Name = "LoginBoxBackground",
-                                                                    BackgroundTransparency = 0.9300000071525574,
-                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    Size = UDim2.new(1, 20, 1, 20),
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 305,
-                                                                ClassName = "Frame"
-                                                            },
-                                                            {
-                                                                Children = {
-                                                                    {
-                                                                        Properties = {
-                                                                            PaddingBottom = UDim.new(0, 8),
-                                                                            PaddingTop = UDim.new(0, 8)
-                                                                        },
-                                                                        Reference = 314,
-                                                                        ClassName = "UIPadding"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    TextWrapped = true,
-                                                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Text = "Log In",
-                                                                                    Name = "OptionText",
-                                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
-                                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                                    BackgroundTransparency = 1,
-                                                                                    BorderSizePixel = 0,
-                                                                                    RichText = true,
-                                                                                    ZIndex = 2,
-                                                                                    TextSize = 14,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 323,
-                                                                                ClassName = "TextLabel"
-                                                                            },
-                                                                            {
-                                                                                Reference = 317,
-                                                                                ClassName = "UICorner"
-                                                                            },
-                                                                            {
-                                                                                Properties = {
-                                                                                    Color = Color3.new(1, 1, 1),
-                                                                                    Transparency = 0.949999988079071
-                                                                                },
-                                                                                Reference = 324,
-                                                                                ClassName = "UIStroke"
-                                                                            },
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Reference = 322,
-                                                                                        ClassName = "UICorner"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    ImageColor3 = Color3.new(1, 0, 0.2666666805744171),
-                                                                                    ImageTransparency = 0.8999999761581421,
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Image = "rbxasset://textures/shadowblurmask.png",
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Name = "Shading",
-                                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                                    ZIndex = 0,
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(0, 0.6509804129600525, 1)
-                                                                                },
-                                                                                Reference = 321,
-                                                                                ClassName = "ImageLabel"
-                                                                            },
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Children = {
-                                                                                            {
-                                                                                                Properties = {
-                                                                                                    Rotation = 90,
-                                                                                                    Transparency = NumberSequence.new({
-                                                                                                        NumberSequenceKeypoint.new(0, 1, 0),
-                                                                                                        NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                                        NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                                        NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
-                                                                                                        NumberSequenceKeypoint.new(1, 1, 0)
-                                                                                                    }),
-                                                                                                    Color = ColorSequence.new({
-                                                                                                        ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
-                                                                                                        ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
-                                                                                                        ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
-                                                                                                    })
-                                                                                                },
-                                                                                                Reference = 320,
-                                                                                                ClassName = "UIGradient"
-                                                                                            }
-                                                                                        },
-                                                                                        Properties = {
-                                                                                            Thickness = 67.12000274658203,
-                                                                                            Name = "Shadow",
-                                                                                            Color = Color3.new(1, 1, 1)
-                                                                                        },
-                                                                                        Reference = 319,
-                                                                                        ClassName = "UIStroke"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                                                    SizeConstraint = Enum.SizeConstraint.RelativeYY,
-                                                                                    Name = "Highlight",
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 318,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            LayoutOrder = 1,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Name = "LogIn",
-                                                                            AnchorPoint = Vector2.new(0.5, 0),
-                                                                            Size = UDim2.new(0, 134, 0, 32),
-                                                                            BackgroundTransparency = 0.800000011920929,
-                                                                            Position = UDim2.new(0.5, 0, 0, 0),
-                                                                            Selectable = false,
-                                                                            Active = false,
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.2313725501298904, 0.2313725501298904, 0.2313725501298904)
-                                                                        },
-                                                                        Reference = 316,
-                                                                        ClassName = "ImageButton"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Reference = 335,
-                                                                                ClassName = "UICorner"
-                                                                            },
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Properties = {
-                                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                                                            Visible = false,
-                                                                                            Position = UDim2.new(0.5, -1, 0.5, 6),
-                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                            Size = UDim2.new(0, 74, 0, 1),
-                                                                                            BorderSizePixel = 0,
-                                                                                            BackgroundColor3 = Color3.new(0.1176470592617989, 0.4705882370471954, 1)
-                                                                                        },
-                                                                                        Reference = 337,
-                                                                                        ClassName = "Frame"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    LayoutOrder = 5,
-                                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
-                                                                                    TextColor3 = Color3.new(1, 0.1294117718935013, 0.2588235437870026),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Text = "<u>Need help?</u>",
-                                                                                    Name = "Help",
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Size = UDim2.new(1, 0, 0, 28),
-                                                                                    BorderSizePixel = 0,
-                                                                                    RichText = true,
-                                                                                    TextSize = 14,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 336,
-                                                                                ClassName = "TextLabel"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            LayoutOrder = 3,
-                                                                            HoverImage = "rbxasset://textures/blackBkg_Square.png",
-                                                                            ImageTransparency = 0.800000011920929,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            PressedImage = "rbxasset://textures/SurfacesDefault.png",
-                                                                            BackgroundTransparency = 1,
-                                                                            Name = "Help",
-                                                                            Size = UDim2.new(1, -20, 0, 28),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 334,
-                                                                        ClassName = "ImageButton"
-                                                                    },
-                                                                    {
-                                                                        Properties = {
-                                                                            Padding = UDim.new(0, 16),
-                                                                            HorizontalAlignment = Enum.HorizontalAlignment.Center,
-                                                                            SortOrder = Enum.SortOrder.LayoutOrder
-                                                                        },
-                                                                        Reference = 315,
-                                                                        ClassName = "UIListLayout"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Reference = 326,
-                                                                                ClassName = "UICorner"
-                                                                            },
-                                                                            {
-                                                                                Properties = {
-                                                                                    TextWrapped = true,
-                                                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Text = "Copy Key Link",
-                                                                                    Name = "OptionText",
-                                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
-                                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                                    BackgroundTransparency = 1,
-                                                                                    BorderSizePixel = 0,
-                                                                                    RichText = true,
-                                                                                    ZIndex = 2,
-                                                                                    TextSize = 14,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 333,
-                                                                                ClassName = "TextLabel"
-                                                                            },
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Children = {
-                                                                                            {
-                                                                                                Properties = {
-                                                                                                    Rotation = 90,
-                                                                                                    Transparency = NumberSequence.new({
-                                                                                                        NumberSequenceKeypoint.new(0, 1, 0),
-                                                                                                        NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                                        NumberSequenceKeypoint.new(0.5, 1, 0),
-                                                                                                        NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
-                                                                                                        NumberSequenceKeypoint.new(1, 1, 0)
-                                                                                                    }),
-                                                                                                    Color = ColorSequence.new({
-                                                                                                        ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
-                                                                                                        ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
-                                                                                                        ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
-                                                                                                    })
-                                                                                                },
-                                                                                                Reference = 330,
-                                                                                                ClassName = "UIGradient"
-                                                                                            }
-                                                                                        },
-                                                                                        Properties = {
-                                                                                            Thickness = 67.12000274658203,
-                                                                                            Name = "Shadow",
-                                                                                            Color = Color3.new(1, 1, 1)
-                                                                                        },
-                                                                                        Reference = 329,
-                                                                                        ClassName = "UIStroke"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                                                    SizeConstraint = Enum.SizeConstraint.RelativeYY,
-                                                                                    Name = "Highlight",
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 328,
-                                                                                ClassName = "Frame"
-                                                                            },
-                                                                            {
-                                                                                Properties = {
-                                                                                    Color = Color3.new(1, 1, 1),
-                                                                                    Transparency = 0.949999988079071
-                                                                                },
-                                                                                Reference = 327,
-                                                                                ClassName = "UIStroke"
-                                                                            },
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Reference = 332,
-                                                                                        ClassName = "UICorner"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    ImageColor3 = Color3.new(1, 0, 0.2666666805744171),
-                                                                                    ImageTransparency = 0.8999999761581421,
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Image = "rbxasset://textures/shadowblurmask.png",
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Name = "Shading",
-                                                                                    Size = UDim2.new(1, 0, 1, 0),
-                                                                                    ZIndex = 0,
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(0, 0.6509804129600525, 1)
-                                                                                },
-                                                                                Reference = 331,
-                                                                                ClassName = "ImageLabel"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            LayoutOrder = 2,
-                                                                            ClipsDescendants = true,
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Name = "CopyKeyLink",
-                                                                            AnchorPoint = Vector2.new(0.5, 0),
-                                                                            Size = UDim2.new(0, 134, 0, 32),
-                                                                            BackgroundTransparency = 0.800000011920929,
-                                                                            Position = UDim2.new(0.5, 0, 0, 0),
-                                                                            Selectable = false,
-                                                                            Active = false,
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(0.2313725501298904, 0.2313725501298904, 0.2313725501298904)
-                                                                        },
-                                                                        Reference = 325,
-                                                                        ClassName = "ImageButton"
-                                                                    },
-                                                                    {
-                                                                        Children = {
-                                                                            {
-                                                                                Properties = {
-                                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
-                                                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Text = "Key",
-                                                                                    Name = "InputCaption",
-                                                                                    Size = UDim2.new(1, -28, 0, 14),
-                                                                                    BackgroundTransparency = 1,
-                                                                                    TextXAlignment = Enum.TextXAlignment.Left,
-                                                                                    Position = UDim2.new(0, 14, 0, 0),
-                                                                                    BorderSizePixel = 0,
-                                                                                    TextSize = 14,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 309,
-                                                                                ClassName = "TextLabel"
-                                                                            },
-                                                                            {
-                                                                                Children = {
-                                                                                    {
-                                                                                        Children = {
-                                                                                            {
-                                                                                                Properties = {
-                                                                                                    Color = Color3.new(1, 1, 1),
-                                                                                                    Transparency = 0.5,
-                                                                                                    ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-                                                                                                },
-                                                                                                Reference = 313,
-                                                                                                ClassName = "UIStroke"
-                                                                                            },
-                                                                                            {
-                                                                                                Properties = {
-                                                                                                    CornerRadius = UDim.new(0, 1)
-                                                                                                },
-                                                                                                Reference = 312,
-                                                                                                ClassName = "UICorner"
-                                                                                            }
-                                                                                        },
-                                                                                        Properties = {
-                                                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
-                                                                                            TextTransparency = 0.5,
-                                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                                                                            PlaceholderColor3 = Color3.new(0.3333333432674408, 0.3333333432674408, 0.3333333432674408),
-                                                                                            PlaceholderText = "Enter key here...",
-                                                                                            TextSize = 14,
-                                                                                            Size = UDim2.new(1, -20, 1, -20),
-                                                                                            ClipsDescendants = true,
-                                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                                            Text = "",
-                                                                                            Name = "Key",
-                                                                                            BackgroundTransparency = 0.800000011920929,
-                                                                                            TextXAlignment = Enum.TextXAlignment.Left,
-                                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                                                            TextColor3 = Color3.new(1, 1, 1),
-                                                                                            BorderSizePixel = 0,
-                                                                                            BackgroundColor3 = Color3.new(0, 0, 0)
-                                                                                        },
-                                                                                        Reference = 311,
-                                                                                        ClassName = "TextBox"
-                                                                                    }
-                                                                                },
-                                                                                Properties = {
-                                                                                    Name = "InputContainer",
-                                                                                    BackgroundTransparency = 1,
-                                                                                    Position = UDim2.new(0, 0, 0, 14),
-                                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                                    Size = UDim2.new(1, 0, 0, 60),
-                                                                                    BorderSizePixel = 0,
-                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                                },
-                                                                                Reference = 310,
-                                                                                ClassName = "Frame"
-                                                                            }
-                                                                        },
-                                                                        Properties = {
-                                                                            BackgroundTransparency = 1,
-                                                                            Name = "KeyField",
-                                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                                            Size = UDim2.new(1, 0, 0, 64),
-                                                                            BorderSizePixel = 0,
-                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                        },
-                                                                        Reference = 308,
-                                                                        ClassName = "Frame"
-                                                                    }
-                                                                },
-                                                                Properties = {
-                                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                                                    Name = "LoginBox",
-                                                                    BackgroundTransparency = 1,
-                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                                                    Size = UDim2.new(0, 200, 0, 250),
-                                                                    ZIndex = 2,
-                                                                    BorderSizePixel = 0,
-                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                                },
-                                                                Reference = 307,
-                                                                ClassName = "Frame"
-                                                            }
-                                                        },
-                                                        Properties = {
-                                                            AnchorPoint = Vector2.new(1, 0.5),
-                                                            Name = "LoginMain",
-                                                            BackgroundTransparency = 1,
-                                                            Position = UDim2.new(1, -60, 0.5, 0),
-                                                            BorderColor3 = Color3.new(0, 0, 0),
-                                                            Size = UDim2.new(0, 200, 0, 250),
-                                                            BorderSizePixel = 0,
-                                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                                        },
-                                                        Reference = 304,
-                                                        ClassName = "Frame"
-                                                    }
-                                                },
-                                                Properties = {
-                                                    AnchorPoint = Vector2.new(1, 0),
-                                                    Name = "Right",
-                                                    BackgroundTransparency = 1,
-                                                    Position = UDim2.new(1, 0, 0, 0),
-                                                    BorderColor3 = Color3.new(0, 0, 0),
-                                                    Size = UDim2.new(0.5, 0, 1, 0),
-                                                    BorderSizePixel = 0,
-                                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                                },
-                                                Reference = 303,
-                                                ClassName = "Frame"
-                                            }
-                                        },
-                                        Properties = {
-                                            AnchorPoint = Vector2.new(0.5, 0.5),
-                                            Name = "MainContent",
-                                            BackgroundTransparency = 1,
-                                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                                            BorderColor3 = Color3.new(0, 0, 0),
-                                            Size = UDim2.new(0, 800, 0, 480),
-                                            BorderSizePixel = 0,
-                                            BackgroundColor3 = Color3.new(1, 1, 1)
-                                        },
-                                        Reference = 220,
-                                        ClassName = "Frame"
-                                    }
-                                },
-                                Properties = {
-                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                    Name = "Login",
-                                    BackgroundTransparency = 1,
-                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                    BorderColor3 = Color3.new(0, 0, 0),
-                                    Size = UDim2.new(1, 0, 1, 0),
-                                    BorderSizePixel = 0,
-                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                },
-                                Reference = 64,
-                                ClassName = "Frame"
-                            }
-                        },
-                        Properties = {
-                            AnchorPoint = Vector2.new(0.5, 0.5),
-                            Name = "Window",
-                            BackgroundTransparency = 1,
-                            Position = UDim2.new(0.5, 0, 0.5, 0),
-                            BorderColor3 = Color3.new(0, 0, 0),
-                            Size = UDim2.new(0, 800, 0, 480),
-                            BorderSizePixel = 0,
-                            BackgroundColor3 = Color3.new(1, 1, 1)
-                        },
-                        Reference = 3,
-                        ClassName = "Frame"
-                    }
-                },
-                Properties = {
-                    MaxDistance = 1000,
-                    Name = "DemonicHub_Gui",
-                    ClipsDescendants = true,
-                    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-                    Brightness = 7,
-                    Face = Enum.NormalId.Back,
-                    CanvasSize = Vector2.new(800, 480)
-                },
-                Reference = 2,
-                ClassName = "SurfaceGui"
-            },
-            {
-                Children = {
-                    {
                         Properties = {
                             Visible = false,
                             BorderColor3 = Color3.new(0, 0, 0),
@@ -4511,11 +349,76 @@ end end,
                             BorderSizePixel = 0,
                             BackgroundColor3 = Color3.new(1, 1, 1)
                         },
-                        Reference = 349,
+                        Reference = 3,
                         ClassName = "Frame"
                     },
                     {
                         Children = {
+                            {
+                                Children = {
+                                    {
+                                        Children = {
+                                            {
+                                                Properties = {
+                                                    Rotation = 90,
+                                                    Transparency = NumberSequence.new({
+                                                        NumberSequenceKeypoint.new(0, 0, 0),
+                                                        NumberSequenceKeypoint.new(0, 1, 0),
+                                                        NumberSequenceKeypoint.new(1, 1, 0)
+                                                    })
+                                                },
+                                                Reference = 10,
+                                                ClassName = "UIGradient"
+                                            }
+                                        },
+                                        Properties = {
+                                            Thickness = 8,
+                                            Transparency = 0.5,
+                                            Color = Color3.new(1, 1, 1)
+                                        },
+                                        Reference = 9,
+                                        ClassName = "UIStroke"
+                                    }
+                                },
+                                Properties = {
+                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                    Name = "ButtonShine",
+                                    BackgroundTransparency = 1,
+                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                    BorderColor3 = Color3.new(0, 0, 0),
+                                    Size = UDim2.new(1, -16, 1, -16),
+                                    BorderSizePixel = 0,
+                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                },
+                                Reference = 8,
+                                ClassName = "Frame"
+                            },
+                            {
+                                Properties = {
+                                    Visible = false,
+                                    Image = "rbxassetid://16755289922",
+                                    BackgroundTransparency = 1,
+                                    Name = "Logo",
+                                    BorderColor3 = Color3.new(0, 0, 0),
+                                    Size = UDim2.new(0, 60, 0, 60),
+                                    BorderSizePixel = 0,
+                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                },
+                                Reference = 5,
+                                ClassName = "ImageLabel"
+                            },
+                            {
+                                Properties = {
+                                    Color = ColorSequence.new({
+                                        ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0.6823529601097107)),
+                                        ColorSequenceKeypoint.new(0.4965398013591766, Color3.new(1, 0.1647058874368668, 0)),
+                                        ColorSequenceKeypoint.new(1, Color3.new(1, 0.4509803950786591, 0))
+                                    }),
+                                    Rotation = 90
+                                },
+                                Reference = 7,
+                                ClassName = "UIGradient"
+                            },
                             {
                                 Children = {
                                     {
@@ -4536,7 +439,7 @@ end end,
                                                         ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
                                                     })
                                                 },
-                                                Reference = 348,
+                                                Reference = 13,
                                                 ClassName = "UIGradient"
                                             }
                                         },
@@ -4545,7 +448,7 @@ end end,
                                             Name = "Shadow",
                                             Color = Color3.new(1, 1, 1)
                                         },
-                                        Reference = 347,
+                                        Reference = 12,
                                         ClassName = "UIStroke"
                                     }
                                 },
@@ -4558,76 +461,11 @@ end end,
                                     BorderSizePixel = 0,
                                     BackgroundColor3 = Color3.new(1, 1, 1)
                                 },
-                                Reference = 346,
+                                Reference = 11,
                                 ClassName = "Frame"
                             },
                             {
-                                Children = {
-                                    {
-                                        Children = {
-                                            {
-                                                Properties = {
-                                                    Rotation = 90,
-                                                    Transparency = NumberSequence.new({
-                                                        NumberSequenceKeypoint.new(0, 0, 0),
-                                                        NumberSequenceKeypoint.new(0, 1, 0),
-                                                        NumberSequenceKeypoint.new(1, 1, 0)
-                                                    })
-                                                },
-                                                Reference = 345,
-                                                ClassName = "UIGradient"
-                                            }
-                                        },
-                                        Properties = {
-                                            Thickness = 8,
-                                            Transparency = 0.5,
-                                            Color = Color3.new(1, 1, 1)
-                                        },
-                                        Reference = 344,
-                                        ClassName = "UIStroke"
-                                    }
-                                },
-                                Properties = {
-                                    AnchorPoint = Vector2.new(0.5, 0.5),
-                                    Name = "ButtonShine",
-                                    BackgroundTransparency = 1,
-                                    Position = UDim2.new(0.5, 0, 0.5, 0),
-                                    BorderColor3 = Color3.new(0, 0, 0),
-                                    Size = UDim2.new(1, -16, 1, -16),
-                                    BorderSizePixel = 0,
-                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                },
-                                Reference = 343,
-                                ClassName = "Frame"
-                            },
-                            {
-                                Properties = {
-                                    Color = ColorSequence.new({
-                                        ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0.6823529601097107)),
-                                        ColorSequenceKeypoint.new(0.4965398013591766, Color3.new(1, 0.1647058874368668, 0)),
-                                        ColorSequenceKeypoint.new(1, Color3.new(1, 0.4509803950786591, 0))
-                                    }),
-                                    Rotation = 90
-                                },
-                                Reference = 342,
-                                ClassName = "UIGradient"
-                            },
-                            {
-                                Properties = {
-                                    Visible = false,
-                                    Image = "rbxassetid://16755289922",
-                                    BackgroundTransparency = 1,
-                                    Name = "Logo",
-                                    BorderColor3 = Color3.new(0, 0, 0),
-                                    Size = UDim2.new(0, 60, 0, 60),
-                                    BorderSizePixel = 0,
-                                    BackgroundColor3 = Color3.new(1, 1, 1)
-                                },
-                                Reference = 340,
-                                ClassName = "ImageLabel"
-                            },
-                            {
-                                Reference = 341,
+                                Reference = 6,
                                 ClassName = "UICorner"
                             }
                         },
@@ -4643,15 +481,4221 @@ end end,
                             BorderSizePixel = 0,
                             BackgroundColor3 = Color3.new(1, 1, 1)
                         },
-                        Reference = 339,
+                        Reference = 4,
                         ClassName = "ImageButton"
+                    },
+                    {
+                        Children = {
+                            {
+                                ClassName = "SurfaceGui",
+                                RefProperties = {
+                                    Adornee = 14
+                                },
+                                Properties = {
+                                    MaxDistance = 1000,
+                                    Name = "DemonicHub_Gui",
+                                    ClipsDescendants = true,
+                                    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+                                    Brightness = 7,
+                                    Face = Enum.NormalId.Back,
+                                    CanvasSize = Vector2.new(800, 480)
+                                },
+                                Reference = 15,
+                                Children = {
+                                    {
+                                        Children = {
+                                            {
+                                                Children = {
+                                                    {
+                                                        Reference = 58,
+                                                        ClassName = "UICorner"
+                                                    },
+                                                    {
+                                                        Children = {
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Reference = 75,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
+                                                                            TextColor3 = Color3.new(1, 1, 1),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Text = "OK",
+                                                                            BackgroundTransparency = 0.8999999761581421,
+                                                                            Name = "OK",
+                                                                            Size = UDim2.new(0, 100, 0, 42),
+                                                                            BorderSizePixel = 0,
+                                                                            TextSize = 14,
+                                                                            BackgroundColor3 = Color3.new(1, 0, 0.5333333611488342)
+                                                                        },
+                                                                        Reference = 74,
+                                                                        ClassName = "TextButton"
+                                                                    },
+                                                                    {
+                                                                        Properties = {
+                                                                            SortOrder = Enum.SortOrder.LayoutOrder,
+                                                                            Padding = UDim.new(0, 20),
+                                                                            HorizontalAlignment = Enum.HorizontalAlignment.Center,
+                                                                            FillDirection = Enum.FillDirection.Horizontal
+                                                                        },
+                                                                        Reference = 76,
+                                                                        ClassName = "UIListLayout"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Reference = 73,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            LayoutOrder = 1,
+                                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
+                                                                            TextColor3 = Color3.new(1, 1, 1),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Text = "Cancel",
+                                                                            AnchorPoint = Vector2.new(1, 0),
+                                                                            Name = "Cancel",
+                                                                            BackgroundTransparency = 0.8999999761581421,
+                                                                            Position = UDim2.new(1, 0, 0, 0),
+                                                                            Size = UDim2.new(0, 100, 0, 42),
+                                                                            BorderSizePixel = 0,
+                                                                            TextSize = 14,
+                                                                            BackgroundColor3 = Color3.new(1, 0, 0.5333333611488342)
+                                                                        },
+                                                                        Reference = 72,
+                                                                        ClassName = "TextButton"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    AnchorPoint = Vector2.new(0.5, 0),
+                                                                    Name = "Buttons",
+                                                                    BackgroundTransparency = 1,
+                                                                    Position = UDim2.new(0.5, 0, 0.7220000028610229, 0),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 220, 0, 42),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 71,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    Thickness = 3,
+                                                                                    Transparency = 0.5
+                                                                                },
+                                                                                Reference = 70,
+                                                                                ClassName = "UIStroke"
+                                                                            },
+                                                                            {
+                                                                                Reference = 69,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, -11, 0, -11),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(1, 8, 1, 8),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 68,
+                                                                        ClassName = "Frame"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    Visible = false,
+                                                                    ClipsDescendants = true,
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    BackgroundTransparency = 1,
+                                                                    Position = UDim2.new(0, 8, 0, 8),
+                                                                    Name = "ShadowClip",
+                                                                    Size = UDim2.new(1, -5, 1, -5),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 67,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Properties = {
+                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
+                                                                    TextColor3 = Color3.new(1, 1, 1),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Text = "Title Text",
+                                                                    Name = "TitleText",
+                                                                    BackgroundTransparency = 1,
+                                                                    Position = UDim2.new(0.2636815905570984, 0, 0.07017543911933899, 0),
+                                                                    Size = UDim2.new(0, 200, 0, 50),
+                                                                    BorderSizePixel = 0,
+                                                                    TextSize = 32,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 61,
+                                                                ClassName = "TextLabel"
+                                                            },
+                                                            {
+                                                                Reference = 60,
+                                                                ClassName = "UICorner"
+                                                            },
+                                                            {
+                                                                Properties = {
+                                                                    Color = Color3.new(1, 1, 1),
+                                                                    Transparency = 0.949999988079071
+                                                                },
+                                                                Reference = 66,
+                                                                ClassName = "UIStroke"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0, 1)
+                                                                                },
+                                                                                Reference = 64,
+                                                                                ClassName = "UICorner"
+                                                                            },
+                                                                            {
+                                                                                Properties = {
+                                                                                    Color = Color3.new(1, 1, 1),
+                                                                                    Transparency = 0.5,
+                                                                                    ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                                                                                },
+                                                                                Reference = 65,
+                                                                                ClassName = "UIStroke"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Visible = false,
+                                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
+                                                                            TextTransparency = 0.5,
+                                                                            TextSize = 14,
+                                                                            TextEditable = false,
+                                                                            ClipsDescendants = true,
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Text = "Example text. Blah blah.",
+                                                                            Name = "KeyLinkBox",
+                                                                            Size = UDim2.new(1, 0, 0, 14),
+                                                                            TextColor3 = Color3.new(0.3333333432674408, 0.3333333432674408, 0.3333333432674408),
+                                                                            BackgroundTransparency = 0.800000011920929,
+                                                                            TextXAlignment = Enum.TextXAlignment.Left,
+                                                                            Position = UDim2.new(0, 0, 0, 53),
+                                                                            ClearTextOnFocus = false,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(0, 0, 0)
+                                                                        },
+                                                                        Reference = 63,
+                                                                        ClassName = "TextBox"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
+                                                                    TextColor3 = Color3.new(1, 1, 1),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Text = "Body text. Lorem ipsum blah blah...",
+                                                                    Name = "BodyText",
+                                                                    Size = UDim2.new(0, 343, 0, 92),
+                                                                    Position = UDim2.new(0.07432320713996887, 0, 0.3026311695575714, 0),
+                                                                    BackgroundTransparency = 1,
+                                                                    TextXAlignment = Enum.TextXAlignment.Left,
+                                                                    BorderSizePixel = 0,
+                                                                    TextWrapped = true,
+                                                                    TextSize = 14,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 62,
+                                                                ClassName = "TextLabel"
+                                                            }
+                                                        },
+                                                        Properties = {
+                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                            Name = "Modal",
+                                                            BackgroundTransparency = 0.2000000029802322,
+                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                            Size = UDim2.new(0, 400, 0, 225),
+                                                            BorderSizePixel = 0,
+                                                            BackgroundColor3 = Color3.new(0.1490196138620377, 0.01568627543747425, 0.05882353335618973)
+                                                        },
+                                                        Reference = 59,
+                                                        ClassName = "Frame"
+                                                    }
+                                                },
+                                                Properties = {
+                                                    Visible = false,
+                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                    Name = "ModalContainer",
+                                                    BackgroundTransparency = 0.4000000059604645,
+                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                    ZIndex = 3,
+                                                    BorderSizePixel = 0,
+                                                    BackgroundColor3 = Color3.new(0, 0, 0)
+                                                },
+                                                Reference = 57,
+                                                ClassName = "Frame"
+                                            },
+                                            {
+                                                Children = {
+                                                    {
+                                                        Children = {
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                                        },
+                                                                                                        Reference = 254,
+                                                                                                        ClassName = "UICorner"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
+                                                                                                            Thickness = 2
+                                                                                                        },
+                                                                                                        Reference = 253,
+                                                                                                        ClassName = "UIStroke"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 0),
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Position = UDim2.new(0, 0, 0, 2),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 200, 0, 200),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 252,
+                                                                                                ClassName = "Frame"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            AnchorPoint = Vector2.new(1, 0),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            Position = UDim2.new(1, 0, 0, 26),
+                                                                                            Name = "GateTopClipRightTop",
+                                                                                            Size = UDim2.new(0, 37, 0, 10),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 251,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Children = {
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 294,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
+                                                                                                                            Position = UDim2.new(0, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 293,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    Name = "SpearLeftClip",
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 292,
+                                                                                                                ClassName = "Frame"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 297,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
+                                                                                                                            Position = UDim2.new(1, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 296,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                                                    Name = "SpearRightClip",
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 295,
+                                                                                                                ClassName = "Frame"
+                                                                                                            }
+                                                                                                        },
+                                                                                                        Properties = {
+                                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                            Size = UDim2.new(0, 6, 0, 6),
+                                                                                                            BackgroundTransparency = 1,
+                                                                                                            ClipsDescendants = true,
+                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                            BorderSizePixel = 0,
+                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                        },
+                                                                                                        Reference = 291,
+                                                                                                        ClassName = "Frame"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                    Name = "CenterPillarTop",
+                                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 2, 0, 6),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                },
+                                                                                                Reference = 290,
+                                                                                                ClassName = "Frame"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                            Name = "PillarLeft2",
+                                                                                            Position = UDim2.new(0.5, -32, 1, 6),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(0, 2, 0, 60),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                        },
+                                                                                        Reference = 289,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Children = {
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 315,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
+                                                                                                                            Position = UDim2.new(1, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 314,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                                                    Name = "SpearRightClip",
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 313,
+                                                                                                                ClassName = "Frame"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 312,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
+                                                                                                                            Position = UDim2.new(0, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 311,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    Name = "SpearLeftClip",
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 310,
+                                                                                                                ClassName = "Frame"
+                                                                                                            }
+                                                                                                        },
+                                                                                                        Properties = {
+                                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                            Size = UDim2.new(0, 6, 0, 6),
+                                                                                                            BackgroundTransparency = 1,
+                                                                                                            ClipsDescendants = true,
+                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                            BorderSizePixel = 0,
+                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                        },
+                                                                                                        Reference = 309,
+                                                                                                        ClassName = "Frame"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                    Name = "CenterPillarTop",
+                                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 2, 0, 6),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                },
+                                                                                                Reference = 308,
+                                                                                                ClassName = "Frame"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                            Name = "PillarRight2",
+                                                                                            Position = UDim2.new(0.5, 32, 1, 6),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(0, 2, 0, 60),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                        },
+                                                                                        Reference = 307,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                                        },
+                                                                                                        Reference = 250,
+                                                                                                        ClassName = "UICorner"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
+                                                                                                            Thickness = 2
+                                                                                                        },
+                                                                                                        Reference = 249,
+                                                                                                        ClassName = "UIStroke"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 0),
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Position = UDim2.new(0, 0, 0, 2),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 200, 0, 200),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 248,
+                                                                                                ClassName = "Frame"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            AnchorPoint = Vector2.new(1, 0),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            Position = UDim2.new(1, 0, 0, 36),
+                                                                                            Name = "GateTopClipRightBottom",
+                                                                                            Size = UDim2.new(0, 37, 0, 10),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 247,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Children = {
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 306,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
+                                                                                                                            Position = UDim2.new(1, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 305,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                                                    Name = "SpearRightClip",
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 304,
+                                                                                                                ClassName = "Frame"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 303,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
+                                                                                                                            Position = UDim2.new(0, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 302,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    Name = "SpearLeftClip",
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 301,
+                                                                                                                ClassName = "Frame"
+                                                                                                            }
+                                                                                                        },
+                                                                                                        Properties = {
+                                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                            Size = UDim2.new(0, 6, 0, 6),
+                                                                                                            BackgroundTransparency = 1,
+                                                                                                            ClipsDescendants = true,
+                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                            BorderSizePixel = 0,
+                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                        },
+                                                                                                        Reference = 300,
+                                                                                                        ClassName = "Frame"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                    Name = "CenterPillarTop",
+                                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 2, 0, 6),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                },
+                                                                                                Reference = 299,
+                                                                                                ClassName = "Frame"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                            Name = "PillarRight1",
+                                                                                            Position = UDim2.new(0.5, 16, 1, 2),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(0, 2, 0, 60),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                        },
+                                                                                        Reference = 298,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Children = {
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 288,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
+                                                                                                                            Position = UDim2.new(1, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 287,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                                                    Name = "SpearRightClip",
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 286,
+                                                                                                                ClassName = "Frame"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 285,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
+                                                                                                                            Position = UDim2.new(0, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 284,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    Name = "SpearLeftClip",
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 283,
+                                                                                                                ClassName = "Frame"
+                                                                                                            }
+                                                                                                        },
+                                                                                                        Properties = {
+                                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                            Size = UDim2.new(0, 6, 0, 6),
+                                                                                                            BackgroundTransparency = 1,
+                                                                                                            ClipsDescendants = true,
+                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                            BorderSizePixel = 0,
+                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                        },
+                                                                                                        Reference = 282,
+                                                                                                        ClassName = "Frame"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                    Name = "CenterPillarTop",
+                                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 2, 0, 6),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                },
+                                                                                                Reference = 281,
+                                                                                                ClassName = "Frame"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                            Name = "PillarLeft1",
+                                                                                            Position = UDim2.new(0.5, -16, 1, 2),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(0, 2, 0, 60),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                        },
+                                                                                        Reference = 280,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                                        },
+                                                                                                        Reference = 246,
+                                                                                                        ClassName = "UICorner"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
+                                                                                                            Thickness = 2
+                                                                                                        },
+                                                                                                        Reference = 245,
+                                                                                                        ClassName = "UIStroke"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 0),
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Position = UDim2.new(1, 0, 0, 2),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 200, 0, 200),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 244,
+                                                                                                ClassName = "Frame"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            Name = "GateTopClipLeftTop",
+                                                                                            Size = UDim2.new(0, 37, 0, 10),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Position = UDim2.new(0, 0, 0, 26),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 243,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Children = {
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 275,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            },
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
+                                                                                                                                    Thickness = 4
+                                                                                                                                },
+                                                                                                                                Reference = 274,
+                                                                                                                                ClassName = "UIStroke"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                                            BackgroundTransparency = 1,
+                                                                                                                            Position = UDim2.new(0.5, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 2, 0, 7),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                        },
+                                                                                                                        Reference = 273,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    Name = "KeyHoleClip2",
+                                                                                                                    Size = UDim2.new(1, 0, 0, 5),
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    Position = UDim2.new(0, 0, 0, 3),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 272,
+                                                                                                                ClassName = "Frame"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                Properties = {
+                                                                                                                    Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
+                                                                                                                    Thickness = 2
+                                                                                                                },
+                                                                                                                Reference = 267,
+                                                                                                                ClassName = "UIStroke"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
+                                                                                                                                    Thickness = 3
+                                                                                                                                },
+                                                                                                                                Reference = 270,
+                                                                                                                                ClassName = "UIStroke"
+                                                                                                                            },
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 271,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(0.5, 0),
+                                                                                                                            BackgroundTransparency = 1,
+                                                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 4, 0, 4),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                        },
+                                                                                                                        Reference = 269,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    Name = "KeyHoleClip1",
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    Size = UDim2.new(1, 0, 0, 3),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 268,
+                                                                                                                ClassName = "Frame"
+                                                                                                            }
+                                                                                                        },
+                                                                                                        Properties = {
+                                                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                                                            BackgroundTransparency = 1,
+                                                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                            Size = UDim2.new(0, 8, 0, 8),
+                                                                                                            BorderSizePixel = 0,
+                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                        },
+                                                                                                        Reference = 266,
+                                                                                                        ClassName = "Frame"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            CornerRadius = UDim.new(0, 2)
+                                                                                                        },
+                                                                                                        Reference = 265,
+                                                                                                        ClassName = "UICorner"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                                                    Name = "Lock",
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 10, 0, 10),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 264,
+                                                                                                ClassName = "Frame"
+                                                                                            },
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            CornerRadius = UDim.new(0, 2)
+                                                                                                        },
+                                                                                                        Reference = 279,
+                                                                                                        ClassName = "UICorner"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0, 1),
+                                                                                                    Name = "Bottom",
+                                                                                                    Position = UDim2.new(0, 0, 1, 0),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(1, 0, 0, 26),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                },
+                                                                                                Reference = 278,
+                                                                                                ClassName = "Frame"
+                                                                                            },
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            CornerRadius = UDim.new(0, 2)
+                                                                                                        },
+                                                                                                        Reference = 277,
+                                                                                                        ClassName = "UICorner"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    Name = "Top",
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(1, 0, 0, 26),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                },
+                                                                                                Reference = 276,
+                                                                                                ClassName = "Frame"
+                                                                                            },
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Children = {
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 263,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(1, 0.5),
+                                                                                                                            Position = UDim2.new(1, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 262,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                                                    Name = "SpearRightClip",
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 261,
+                                                                                                                ClassName = "Frame"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                Children = {
+                                                                                                                    {
+                                                                                                                        Children = {
+                                                                                                                            {
+                                                                                                                                Properties = {
+                                                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                                                },
+                                                                                                                                Reference = 260,
+                                                                                                                                ClassName = "UICorner"
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        Properties = {
+                                                                                                                            AnchorPoint = Vector2.new(0, 0.5),
+                                                                                                                            Position = UDim2.new(0, 0, 1, 0),
+                                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                            Size = UDim2.new(0, 15, 0, 15),
+                                                                                                                            BorderSizePixel = 0,
+                                                                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                                        },
+                                                                                                                        Reference = 259,
+                                                                                                                        ClassName = "Frame"
+                                                                                                                    }
+                                                                                                                },
+                                                                                                                Properties = {
+                                                                                                                    Name = "SpearLeftClip",
+                                                                                                                    BackgroundTransparency = 1,
+                                                                                                                    ClipsDescendants = true,
+                                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                                    Size = UDim2.new(0, 3, 0, 6),
+                                                                                                                    BorderSizePixel = 0,
+                                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                                },
+                                                                                                                Reference = 258,
+                                                                                                                ClassName = "Frame"
+                                                                                                            }
+                                                                                                        },
+                                                                                                        Properties = {
+                                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                            Size = UDim2.new(0, 6, 0, 6),
+                                                                                                            BackgroundTransparency = 1,
+                                                                                                            ClipsDescendants = true,
+                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                            BorderSizePixel = 0,
+                                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                        },
+                                                                                                        Reference = 257,
+                                                                                                        ClassName = "Frame"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 1),
+                                                                                                    Name = "CenterPillarTop",
+                                                                                                    Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 2, 0, 6),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                                                },
+                                                                                                Reference = 256,
+                                                                                                ClassName = "Frame"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(0.5, 1),
+                                                                                            Name = "PillarCenterBig",
+                                                                                            BackgroundTransparency = 1,
+                                                                                            Position = UDim2.new(0.5, 0, 1, 0),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(0, 6, 0, 60),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 255,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                                        },
+                                                                                                        Reference = 242,
+                                                                                                        ClassName = "UICorner"
+                                                                                                    },
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
+                                                                                                            Thickness = 2
+                                                                                                        },
+                                                                                                        Reference = 241,
+                                                                                                        ClassName = "UIStroke"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 0),
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Position = UDim2.new(1, 0, 0, 2),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(0, 200, 0, 200),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 240,
+                                                                                                ClassName = "Frame"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            Name = "GateTopClipLeftBottom",
+                                                                                            Size = UDim2.new(0, 37, 0, 10),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Position = UDim2.new(0, 0, 0, 36),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 239,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Name = "Offset",
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(0, 0, 0, -6),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 238,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Hell gates icon",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.300000011920929, 0, 0, 110),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 80, 0, 80),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 237,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
+                                                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Text = "to continue to Demonic Hub",
+                                                                                    AnchorPoint = Vector2.new(0.5, 0),
+                                                                                    Name = "PageSubtitle",
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(0.5, 0, 1, -20),
+                                                                                    Size = UDim2.new(0, 200, 0, 50),
+                                                                                    BorderSizePixel = 0,
+                                                                                    TextSize = 16,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 236,
+                                                                                ClassName = "TextLabel"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
+                                                                            TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Text = "Log in",
+                                                                            Name = "PageTitle",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 60, 0.4000000059604645, 0),
+                                                                            Size = UDim2.new(0, 200, 0, 50),
+                                                                            BorderSizePixel = 0,
+                                                                            TextSize = 32,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 235,
+                                                                        ClassName = "TextLabel"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    BackgroundTransparency = 1,
+                                                                    Name = "Left",
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0.5, 0, 1, 0),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 234,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            PaddingBottom = UDim.new(0, 8),
+                                                                                            PaddingTop = UDim.new(0, 8)
+                                                                                        },
+                                                                                        Reference = 327,
+                                                                                        ClassName = "UIPadding"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Reference = 335,
+                                                                                                        ClassName = "UICorner"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    ImageColor3 = Color3.new(1, 0, 0.2666666805744171),
+                                                                                                    ImageTransparency = 0.8999999761581421,
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Image = "rbxasset://textures/shadowblurmask.png",
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Name = "Shading",
+                                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                                    ZIndex = 0,
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(0, 0.6509804129600525, 1)
+                                                                                                },
+                                                                                                Reference = 334,
+                                                                                                ClassName = "ImageLabel"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    Color = Color3.new(1, 1, 1),
+                                                                                                    Transparency = 0.949999988079071
+                                                                                                },
+                                                                                                Reference = 337,
+                                                                                                ClassName = "UIStroke"
+                                                                                            },
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Children = {
+                                                                                                            {
+                                                                                                                Properties = {
+                                                                                                                    Rotation = 90,
+                                                                                                                    Transparency = NumberSequence.new({
+                                                                                                                        NumberSequenceKeypoint.new(0, 1, 0),
+                                                                                                                        NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                                        NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                                        NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
+                                                                                                                        NumberSequenceKeypoint.new(1, 1, 0)
+                                                                                                                    }),
+                                                                                                                    Color = ColorSequence.new({
+                                                                                                                        ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
+                                                                                                                        ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
+                                                                                                                        ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
+                                                                                                                    })
+                                                                                                                },
+                                                                                                                Reference = 333,
+                                                                                                                ClassName = "UIGradient"
+                                                                                                            }
+                                                                                                        },
+                                                                                                        Properties = {
+                                                                                                            Thickness = 67.12000274658203,
+                                                                                                            Name = "Shadow",
+                                                                                                            Color = Color3.new(1, 1, 1)
+                                                                                                        },
+                                                                                                        Reference = 332,
+                                                                                                        ClassName = "UIStroke"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                                                    SizeConstraint = Enum.SizeConstraint.RelativeYY,
+                                                                                                    Name = "Highlight",
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 331,
+                                                                                                ClassName = "Frame"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    TextWrapped = true,
+                                                                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Text = "Log In",
+                                                                                                    Name = "OptionText",
+                                                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
+                                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    RichText = true,
+                                                                                                    ZIndex = 2,
+                                                                                                    TextSize = 14,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 336,
+                                                                                                ClassName = "TextLabel"
+                                                                                            },
+                                                                                            {
+                                                                                                Reference = 330,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            LayoutOrder = 1,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Name = "LogIn",
+                                                                                            AnchorPoint = Vector2.new(0.5, 0),
+                                                                                            Size = UDim2.new(0, 134, 0, 32),
+                                                                                            BackgroundTransparency = 0.800000011920929,
+                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                            Selectable = false,
+                                                                                            Active = false,
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.2313725501298904, 0.2313725501298904, 0.2313725501298904)
+                                                                                        },
+                                                                                        Reference = 329,
+                                                                                        ClassName = "ImageButton"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Reference = 348,
+                                                                                                ClassName = "UICorner"
+                                                                                            },
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Properties = {
+                                                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                                                            Visible = false,
+                                                                                                            Position = UDim2.new(0.5, -1, 0.5, 6),
+                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                            Size = UDim2.new(0, 74, 0, 1),
+                                                                                                            BorderSizePixel = 0,
+                                                                                                            BackgroundColor3 = Color3.new(0.1176470592617989, 0.4705882370471954, 1)
+                                                                                                        },
+                                                                                                        Reference = 350,
+                                                                                                        ClassName = "Frame"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    LayoutOrder = 5,
+                                                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
+                                                                                                    TextColor3 = Color3.new(1, 0.1294117718935013, 0.2588235437870026),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Text = "<u>Need help?</u>",
+                                                                                                    Name = "Help",
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Size = UDim2.new(1, 0, 0, 28),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    RichText = true,
+                                                                                                    TextSize = 14,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 349,
+                                                                                                ClassName = "TextLabel"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            LayoutOrder = 3,
+                                                                                            HoverImage = "rbxasset://textures/blackBkg_Square.png",
+                                                                                            ImageTransparency = 0.800000011920929,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            PressedImage = "rbxasset://textures/SurfacesDefault.png",
+                                                                                            BackgroundTransparency = 1,
+                                                                                            Name = "Help",
+                                                                                            Size = UDim2.new(1, -20, 0, 28),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 347,
+                                                                                        ClassName = "ImageButton"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Reference = 345,
+                                                                                                        ClassName = "UICorner"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    ImageColor3 = Color3.new(1, 0, 0.2666666805744171),
+                                                                                                    ImageTransparency = 0.8999999761581421,
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Image = "rbxasset://textures/shadowblurmask.png",
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Name = "Shading",
+                                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                                    ZIndex = 0,
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(0, 0.6509804129600525, 1)
+                                                                                                },
+                                                                                                Reference = 344,
+                                                                                                ClassName = "ImageLabel"
+                                                                                            },
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Children = {
+                                                                                                            {
+                                                                                                                Properties = {
+                                                                                                                    Rotation = 90,
+                                                                                                                    Transparency = NumberSequence.new({
+                                                                                                                        NumberSequenceKeypoint.new(0, 1, 0),
+                                                                                                                        NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                                        NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                                        NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
+                                                                                                                        NumberSequenceKeypoint.new(1, 1, 0)
+                                                                                                                    }),
+                                                                                                                    Color = ColorSequence.new({
+                                                                                                                        ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
+                                                                                                                        ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
+                                                                                                                        ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
+                                                                                                                    })
+                                                                                                                },
+                                                                                                                Reference = 343,
+                                                                                                                ClassName = "UIGradient"
+                                                                                                            }
+                                                                                                        },
+                                                                                                        Properties = {
+                                                                                                            Thickness = 67.12000274658203,
+                                                                                                            Name = "Shadow",
+                                                                                                            Color = Color3.new(1, 1, 1)
+                                                                                                        },
+                                                                                                        Reference = 342,
+                                                                                                        ClassName = "UIStroke"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                                                    SizeConstraint = Enum.SizeConstraint.RelativeYY,
+                                                                                                    Name = "Highlight",
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 341,
+                                                                                                ClassName = "Frame"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    TextWrapped = true,
+                                                                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Text = "Copy Key Link",
+                                                                                                    Name = "OptionText",
+                                                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
+                                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    RichText = true,
+                                                                                                    ZIndex = 2,
+                                                                                                    TextSize = 14,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 346,
+                                                                                                ClassName = "TextLabel"
+                                                                                            },
+                                                                                            {
+                                                                                                Reference = 339,
+                                                                                                ClassName = "UICorner"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    Color = Color3.new(1, 1, 1),
+                                                                                                    Transparency = 0.949999988079071
+                                                                                                },
+                                                                                                Reference = 340,
+                                                                                                ClassName = "UIStroke"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            LayoutOrder = 2,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Name = "CopyKeyLink",
+                                                                                            AnchorPoint = Vector2.new(0.5, 0),
+                                                                                            Size = UDim2.new(0, 134, 0, 32),
+                                                                                            BackgroundTransparency = 0.800000011920929,
+                                                                                            Position = UDim2.new(0.5, 0, 0, 0),
+                                                                                            Selectable = false,
+                                                                                            Active = false,
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.2313725501298904, 0.2313725501298904, 0.2313725501298904)
+                                                                                        },
+                                                                                        Reference = 338,
+                                                                                        ClassName = "ImageButton"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Children = {
+                                                                                                    {
+                                                                                                        Children = {
+                                                                                                            {
+                                                                                                                Properties = {
+                                                                                                                    Color = Color3.new(1, 1, 1),
+                                                                                                                    Transparency = 0.5,
+                                                                                                                    ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                                                                                                                },
+                                                                                                                Reference = 326,
+                                                                                                                ClassName = "UIStroke"
+                                                                                                            },
+                                                                                                            {
+                                                                                                                Properties = {
+                                                                                                                    CornerRadius = UDim.new(0, 1)
+                                                                                                                },
+                                                                                                                Reference = 325,
+                                                                                                                ClassName = "UICorner"
+                                                                                                            }
+                                                                                                        },
+                                                                                                        Properties = {
+                                                                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
+                                                                                                            TextTransparency = 0.5,
+                                                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                                                            PlaceholderColor3 = Color3.new(0.3333333432674408, 0.3333333432674408, 0.3333333432674408),
+                                                                                                            PlaceholderText = "Enter key here...",
+                                                                                                            TextSize = 14,
+                                                                                                            Size = UDim2.new(1, -20, 1, -20),
+                                                                                                            ClipsDescendants = true,
+                                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                            Text = "",
+                                                                                                            Name = "Key",
+                                                                                                            BackgroundTransparency = 0.800000011920929,
+                                                                                                            TextXAlignment = Enum.TextXAlignment.Left,
+                                                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                                                            TextColor3 = Color3.new(1, 1, 1),
+                                                                                                            BorderSizePixel = 0,
+                                                                                                            BackgroundColor3 = Color3.new(0, 0, 0)
+                                                                                                        },
+                                                                                                        Reference = 324,
+                                                                                                        ClassName = "TextBox"
+                                                                                                    }
+                                                                                                },
+                                                                                                Properties = {
+                                                                                                    Name = "InputContainer",
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    Position = UDim2.new(0, 0, 0, 14),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Size = UDim2.new(1, 0, 0, 60),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 323,
+                                                                                                ClassName = "Frame"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
+                                                                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
+                                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                                    Text = "Key",
+                                                                                                    Name = "InputCaption",
+                                                                                                    Size = UDim2.new(1, -28, 0, 14),
+                                                                                                    BackgroundTransparency = 1,
+                                                                                                    TextXAlignment = Enum.TextXAlignment.Left,
+                                                                                                    Position = UDim2.new(0, 14, 0, 0),
+                                                                                                    BorderSizePixel = 0,
+                                                                                                    TextSize = 14,
+                                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                                },
+                                                                                                Reference = 322,
+                                                                                                ClassName = "TextLabel"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            BackgroundTransparency = 1,
+                                                                                            Name = "KeyField",
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(1, 0, 0, 64),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 321,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Padding = UDim.new(0, 16),
+                                                                                            HorizontalAlignment = Enum.HorizontalAlignment.Center,
+                                                                                            SortOrder = Enum.SortOrder.LayoutOrder
+                                                                                        },
+                                                                                        Reference = 328,
+                                                                                        ClassName = "UIListLayout"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                                    Name = "LoginBox",
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                                    Size = UDim2.new(0, 200, 0, 250),
+                                                                                    ZIndex = 2,
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 320,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Reference = 319,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                                    Name = "LoginBoxBackground",
+                                                                                    BackgroundTransparency = 0.9300000071525574,
+                                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(1, 20, 1, 20),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 318,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            AnchorPoint = Vector2.new(1, 0.5),
+                                                                            Name = "LoginMain",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(1, -60, 0.5, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 200, 0, 250),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 317,
+                                                                        ClassName = "Frame"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                    Name = "Right",
+                                                                    BackgroundTransparency = 1,
+                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0.5, 0, 1, 0),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 316,
+                                                                ClassName = "Frame"
+                                                            }
+                                                        },
+                                                        Properties = {
+                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                            Name = "MainContent",
+                                                            BackgroundTransparency = 1,
+                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                            Size = UDim2.new(0, 800, 0, 480),
+                                                            BorderSizePixel = 0,
+                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                        },
+                                                        Reference = 233,
+                                                        ClassName = "Frame"
+                                                    },
+                                                    {
+                                                        Children = {
+                                                            {
+                                                                Properties = {
+                                                                    Name = "Barrier1",
+                                                                    Position = UDim2.new(0.5, 0, 0, 0),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 84, 0, 60),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                },
+                                                                Reference = 150,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    Color = Color3.new(0.5960784554481506, 0.5960784554481506, 0.5960784554481506),
+                                                                                                    Thickness = 12
+                                                                                                },
+                                                                                                Reference = 112,
+                                                                                                ClassName = "UIStroke"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 111,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(1, 0),
+                                                                                            Size = UDim2.new(2, 0, 1, 0),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Position = UDim2.new(1, -12, 0, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 110,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Name = "ClippingRegion_Special",
+                                                                                    BackgroundTransparency = 1,
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 109,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment2_Special",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0, 120),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 84, 0, 120),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 108,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 120,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            BackgroundTransparency = 0.5,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(2, -6, 2, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                                        },
+                                                                                        Reference = 119,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                    Name = "ClippingRegion",
+                                                                                    Size = UDim2.new(1, 12, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 118,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment5",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 0, 0, 480),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 60, 0, 60),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 117,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    Color = Color3.new(0.5960784554481506, 0.5960784554481506, 0.5960784554481506),
+                                                                                                    Thickness = 12
+                                                                                                },
+                                                                                                Reference = 125,
+                                                                                                ClassName = "UIStroke"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 124,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(1, 0),
+                                                                                            Size = UDim2.new(2, 0, 1, 0),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Position = UDim2.new(1, -12, 0, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 123,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Name = "ClippingRegion_Special",
+                                                                                    BackgroundTransparency = 1,
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 122,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment4_Special",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0, 360),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 84, 0, 120),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 121,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 107,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(0, 1),
+                                                                                            BackgroundTransparency = 0.5,
+                                                                                            Position = UDim2.new(0, 0, 1, 0),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(2, -6, 2, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                                        },
+                                                                                        Reference = 106,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                    Name = "ClippingRegion",
+                                                                                    Size = UDim2.new(1, 12, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 105,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment1",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 0, 0, 60),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 60, 0, 60),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 104,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 116,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            BackgroundTransparency = 0.5,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(2, -6, 1, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                                        },
+                                                                                        Reference = 115,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                    Name = "ClippingRegion",
+                                                                                    Size = UDim2.new(1, 12, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 114,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment3",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 0, 0, 240),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 60, 0, 120),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 113,
+                                                                        ClassName = "Frame"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                    Name = "MiddleJoinsContainer2",
+                                                                    BackgroundTransparency = 1,
+                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                    Size = UDim2.new(0, 120, 0, 600),
+                                                                    ZIndex = 2,
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 103,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Properties = {
+                                                                    Rotation = -90,
+                                                                    Name = "LoginDemonic",
+                                                                    Color = ColorSequence.new({
+                                                                        ColorSequenceKeypoint.new(0, Color3.new(0.294117659330368, 0, 0.2000000029802322)),
+                                                                        ColorSequenceKeypoint.new(1, Color3.new(0.294117659330368, 0.1215686276555061, 0))
+                                                                    })
+                                                                },
+                                                                Reference = 149,
+                                                                ClassName = "UIGradient"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 97,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(2, 0, 2, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                                        },
+                                                                                        Reference = 96,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                    Name = "ClippingRegion",
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 95,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment5",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 0, 0, 480),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 60, 0, 60),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 94,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 84,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(0, 1),
+                                                                                            Position = UDim2.new(0, 0, 1, 0),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(2, 0, 2, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                                        },
+                                                                                        Reference = 83,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                    Name = "ClippingRegion",
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 82,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment1",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 0, 0, 60),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 60, 0, 60),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 81,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 93,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(2, 0, 1, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                                        },
+                                                                                        Reference = 92,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                    Name = "ClippingRegion",
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 91,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment3",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 0, 0, 240),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 60, 0, 120),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 90,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 101,
+                                                                                                ClassName = "UICorner"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    Color = Color3.new(0.800000011920929, 0.800000011920929, 0.800000011920929),
+                                                                                                    Thickness = 12
+                                                                                                },
+                                                                                                Reference = 102,
+                                                                                                ClassName = "UIStroke"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(1, 0),
+                                                                                            Size = UDim2.new(2, 0, 1, 0),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Position = UDim2.new(1, -12, 0, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 100,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Name = "ClippingRegion_Special",
+                                                                                    BackgroundTransparency = 1,
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 99,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment4_Special",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0, 360),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 72, 0, 120),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 98,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    Color = Color3.new(0.800000011920929, 0.800000011920929, 0.800000011920929),
+                                                                                                    Thickness = 12
+                                                                                                },
+                                                                                                Reference = 89,
+                                                                                                ClassName = "UIStroke"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 88,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(1, 0),
+                                                                                            Size = UDim2.new(2, 0, 1, 0),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Position = UDim2.new(1, -12, 0, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 87,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Name = "ClippingRegion_Special",
+                                                                                    BackgroundTransparency = 1,
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 86,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment2_Special",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0, 120),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 72, 0, 120),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 85,
+                                                                        ClassName = "Frame"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                    Name = "MiddleJoinsContainer1",
+                                                                    BackgroundTransparency = 1,
+                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 120, 0, 600),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 80,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0, 50)
+                                                                                },
+                                                                                Reference = 232,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Line1",
+                                                                            Position = UDim2.new(-0.01647376641631126, 0, 0.7522173523902893, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 360, 0, 360),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(0.9176470637321472, 0.9176470637321472, 0.9176470637321472)
+                                                                        },
+                                                                        Reference = 231,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(1, 0)
+                                                                                },
+                                                                                Reference = 230,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Rotation = 90,
+                                                                            Name = "Line2",
+                                                                            Position = UDim2.new(0.1945109665393829, 0, 0.566730797290802, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 225, 0, 100),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(0.9176470637321472, 0.9176470637321472, 0.9176470637321472)
+                                                                        },
+                                                                        Reference = 229,
+                                                                        ClassName = "Frame"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Name = "Mountains",
+                                                                    Rotation = 45,
+                                                                    Size = UDim2.new(0, 600, 0, 340),
+                                                                    BackgroundTransparency = 1,
+                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                    ZIndex = -1,
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 228,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Properties = {
+                                                                    AnchorPoint = Vector2.new(0, 0.5),
+                                                                    Name = "Barrier3",
+                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 84, 0, 120),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                },
+                                                                Reference = 152,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Reference = 79,
+                                                                ClassName = "UICorner"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                        },
+                                                                                        Reference = 204,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Position = UDim2.new(0.3400000035762787, 0, 0.3092356324195862, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 6, 0, 38),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
+                                                                                },
+                                                                                Reference = 203,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                        },
+                                                                                        Reference = 202,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Position = UDim2.new(0.3149999976158142, 0, 0.3770833313465118, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 46, 0, 6),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
+                                                                                },
+                                                                                Reference = 201,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                        },
+                                                                                        Reference = 206,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Position = UDim2.new(0.3149999976158142, 0, 0.3321523070335388, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 6, 0, 27),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
+                                                                                },
+                                                                                Reference = 205,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                        },
+                                                                                        Reference = 208,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Position = UDim2.new(0.3650000095367432, 0, 0.3321523070335388, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 6, 0, 26),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
+                                                                                },
+                                                                                Reference = 207,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                        },
+                                                                                        Reference = 210,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Position = UDim2.new(0.3400000035762787, 0, 0.3770833313465118, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 6, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 0.388235330581665, 0.4000000357627869)
+                                                                                },
+                                                                                Reference = 209,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Rotation = -7,
+                                                                            Name = "Pitchfork",
+                                                                            BackgroundTransparency = 0.9900000095367432,
+                                                                            Position = UDim2.new(0.05750000104308128, 0, 0.3354166746139526, 0),
+                                                                            Size = UDim2.new(1, 0, 1, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 200,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Properties = {
+                                                                            Name = "PillarPart",
+                                                                            Position = UDim2.new(0.1687500029802322, 0, 0.637499988079071, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 70, 0, 12),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(0.9019608497619629, 0.9019608497619629, 0.9019608497619629)
+                                                                        },
+                                                                        Reference = 186,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    Name = "Smoothing",
+                                                                                    CornerRadius = UDim.new(0, 1)
+                                                                                },
+                                                                                Reference = 176,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Rotation = -17,
+                                                                            Name = "Lava",
+                                                                            Position = UDim2.new(0.4946741461753845, 0, 0.2934430539608002, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 10, 0, 87),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 175,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 183,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 75, 0, 36),
+                                                                            Name = "LavaRockPart",
+                                                                            Position = UDim2.new(0.166250005364418, 0, 0.8625668883323669, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 182,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Properties = {
+                                                                            Name = "PillarPart",
+                                                                            Position = UDim2.new(0.1687500029802322, 0, 0.4041666686534882, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 70, 0, 12),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 179,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 192,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 53, 0, 19),
+                                                                            Name = "LavaRockPart",
+                                                                            Position = UDim2.new(0.1337500065565109, 0, 0.8479834198951721, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 191,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 185,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 36, 0, 17),
+                                                                            Name = "LavaRockPart",
+                                                                            Position = UDim2.new(0.2989233732223511, 0, 0.7314901351928711, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 184,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 188,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 35, 0, 19),
+                                                                            Name = "LavaRockPart",
+                                                                            Position = UDim2.new(0.4524999856948853, 0, 0.8030250668525696, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 187,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 800, 0, 160),
+                                                                            Name = "Ground",
+                                                                            Position = UDim2.new(0, 0, 0.6625000238418579, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 2,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(0.4745098352432251, 0.4745098352432251, 0.4745098352432251)
+                                                                        },
+                                                                        Reference = 170,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    Name = "Smoothing",
+                                                                                    CornerRadius = UDim.new(0, 1)
+                                                                                },
+                                                                                Reference = 172,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Rotation = 25,
+                                                                            Name = "Lava",
+                                                                            Position = UDim2.new(0.4221741557121277, 0, 0.5288597345352173, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 10, 0, 87),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 171,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    Name = "Smoothing",
+                                                                                    CornerRadius = UDim.new(0, 1)
+                                                                                },
+                                                                                Reference = 178,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Rotation = 8,
+                                                                            Name = "Lava",
+                                                                            Position = UDim2.new(0.4768529534339905, 0, 0.2056959122419357, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 10, 0, 100),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 177,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 199,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 75, 0, 36),
+                                                                            Name = "LavaRockPart",
+                                                                            Position = UDim2.new(0.15625, 0, 0.8373774290084839, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 198,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Name = "Smoothing",
+                                                                                            CornerRadius = UDim.new(0, 1)
+                                                                                        },
+                                                                                        Reference = 161,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Rotation = 20,
+                                                                                    Position = UDim2.new(0.4199999868869781, 0, 0.2020833343267441, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 100, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
+                                                                                },
+                                                                                Reference = 160,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Name = "Smoothing",
+                                                                                            CornerRadius = UDim.new(0, 1)
+                                                                                        },
+                                                                                        Reference = 159,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Rotation = 20,
+                                                                                    Position = UDim2.new(0.3537499904632568, 0, 0.3604166805744171, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 100, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
+                                                                                },
+                                                                                Reference = 158,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Name = "Smoothing",
+                                                                                            CornerRadius = UDim.new(0, 1)
+                                                                                        },
+                                                                                        Reference = 169,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Rotation = 40,
+                                                                                    Name = "Island",
+                                                                                    Position = UDim2.new(0.04849612340331078, 0, 0.5146617293357849, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 100, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
+                                                                                },
+                                                                                Reference = 168,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Name = "Smoothing",
+                                                                                            CornerRadius = UDim.new(0, 1)
+                                                                                        },
+                                                                                        Reference = 157,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Rotation = 20,
+                                                                                    Position = UDim2.new(0.2949999868869781, 0, 0.4666666686534882, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 100, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
+                                                                                },
+                                                                                Reference = 156,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Name = "Smoothing",
+                                                                                            CornerRadius = UDim.new(0, 1)
+                                                                                        },
+                                                                                        Reference = 163,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Rotation = -20,
+                                                                                    Position = UDim2.new(0.4625000059604645, 0, 0.2583333253860474, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 100, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
+                                                                                },
+                                                                                Reference = 162,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Name = "Smoothing",
+                                                                                            CornerRadius = UDim.new(0, 1)
+                                                                                        },
+                                                                                        Reference = 165,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Rotation = 20,
+                                                                                    Position = UDim2.new(0.4199999868869781, 0, 0.487500011920929, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 100, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
+                                                                                },
+                                                                                Reference = 164,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Name = "Smoothing",
+                                                                                            CornerRadius = UDim.new(0, 1)
+                                                                                        },
+                                                                                        Reference = 167,
+                                                                                        ClassName = "UICorner"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Rotation = 20,
+                                                                                    Position = UDim2.new(0.4787499904632568, 0, 0.5083333253860474, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 100, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.2823529541492462, 0.2901960909366608)
+                                                                                },
+                                                                                Reference = 166,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Rotation = -6,
+                                                                            Name = "Volcano",
+                                                                            BackgroundTransparency = 1,
+                                                                            Size = UDim2.new(1, 0, 1, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 0,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 155,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 212,
+                                                                                ClassName = "UICorner"
+                                                                            },
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(1, 0, 0.5, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 225,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            CornerRadius = UDim.new(0.5, 0)
+                                                                                        },
+                                                                                        Reference = 214,
+                                                                                        ClassName = "UICorner"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 220,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            Position = UDim2.new(0, 19, 0, 0),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(0, 6, 1.399999976158142, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 219,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 222,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            Size = UDim2.new(0, 6, 0, 6),
+                                                                                            Name = "Eye",
+                                                                                            Position = UDim2.new(0, 2, 0, 0),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            ZIndex = 2,
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.5960784554481506, 0.5960784554481506, 0.5960784554481506)
+                                                                                        },
+                                                                                        Reference = 221,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 216,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            Position = UDim2.new(0, 7, 0, 0),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(0, 6, 1.399999976158142, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 215,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 218,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            Position = UDim2.new(0, 13, 0, 0),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(0, 6, 1.399999976158142, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 217,
+                                                                                        ClassName = "Frame"
+                                                                                    },
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 224,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            Size = UDim2.new(0, 6, 0, 6),
+                                                                                            Name = "Eye",
+                                                                                            Position = UDim2.new(0.5, 2, 0, 0),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            ZIndex = 2,
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.5960784554481506, 0.5960784554481506, 0.5960784554481506)
+                                                                                        },
+                                                                                        Reference = 223,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Position = UDim2.new(0, 0, 0.5, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(1, 0, 0.5, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 213,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 30, 0, 30),
+                                                                            Name = "Skull",
+                                                                            Position = UDim2.new(0.5, 0, 0.75, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 211,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 227,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 53, 0, 28),
+                                                                            Name = "LavaRockPart",
+                                                                            Position = UDim2.new(0.1174999997019768, 0, 0.8798016905784607, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 226,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 197,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 36, 0, 17),
+                                                                            Name = "LavaRockPart",
+                                                                            Position = UDim2.new(0.294016033411026, 0, 0.7191287279129028, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 196,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 181,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 26, 0, 13),
+                                                                            Name = "LavaRockPart",
+                                                                            Position = UDim2.new(0.2750000059604645, 0, 0.7399479150772095, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 180,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    Name = "Line",
+                                                                                    Position = UDim2.new(0, 10, 0, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 10, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.7058823704719543, 0.7058823704719543)
+                                                                                },
+                                                                                Reference = 194,
+                                                                                ClassName = "Frame"
+                                                                            },
+                                                                            {
+                                                                                Properties = {
+                                                                                    Name = "Line",
+                                                                                    Position = UDim2.new(0, 30, 0, 0),
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(0, 10, 0, 100),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(0.7058823704719543, 0.7058823704719543, 0.7058823704719543)
+                                                                                },
+                                                                                Reference = 195,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "PillarPart",
+                                                                            Position = UDim2.new(0.1812500059604645, 0, 0.4291666746139526, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 50, 0, 100),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(0.8196079134941101, 0.8196079134941101, 0.8196079134941101)
+                                                                        },
+                                                                        Reference = 193,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                },
+                                                                                Reference = 190,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Size = UDim2.new(0, 26, 0, 9),
+                                                                            Name = "LavaRockPart",
+                                                                            Position = UDim2.new(0.2829744815826416, 0, 0.7243335247039795, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            ZIndex = 3,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 189,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    Name = "Smoothing",
+                                                                                    CornerRadius = UDim.new(0, 1)
+                                                                                },
+                                                                                Reference = 174,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Rotation = -6,
+                                                                            Name = "Lava",
+                                                                            Position = UDim2.new(0.4679740071296692, 0, 0.4559817016124725, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 10, 0, 137),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.5803921818733215, 0.5803921818733215)
+                                                                        },
+                                                                        Reference = 173,
+                                                                        ClassName = "Frame"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    Name = "DemonicBg",
+                                                                    BackgroundTransparency = 1,
+                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    ZIndex = 0,
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 154,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Properties = {
+                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                    Name = "BarrierRight",
+                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0.5, -84, 1, 0),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                },
+                                                                Reference = 153,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    Color = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177),
+                                                                                                    Thickness = 25
+                                                                                                },
+                                                                                                Reference = 148,
+                                                                                                ClassName = "UIStroke"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 147,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(1, 0),
+                                                                                            Size = UDim2.new(2, 0, 1, 0),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Position = UDim2.new(1, 0, 0, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 146,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Name = "ClippingRegion_Special",
+                                                                                    BackgroundTransparency = 1,
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 145,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment4_End",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0, 360),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 84, 0, 120),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 144,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 130,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(0, 1),
+                                                                                            BackgroundTransparency = 0.5,
+                                                                                            Position = UDim2.new(0, 0, 1, 0),
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(2, -12, 2, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                                        },
+                                                                                        Reference = 129,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                    Name = "ClippingRegion",
+                                                                                    Size = UDim2.new(1, 24, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 128,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment1",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 0, 0, 60),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 60, 0, 60),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 127,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 134,
+                                                                                                ClassName = "UICorner"
+                                                                                            },
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    Color = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177),
+                                                                                                    Thickness = 25
+                                                                                                },
+                                                                                                Reference = 135,
+                                                                                                ClassName = "UIStroke"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            AnchorPoint = Vector2.new(1, 0),
+                                                                                            Size = UDim2.new(2, 0, 1, 0),
+                                                                                            BackgroundTransparency = 1,
+                                                                                            ClipsDescendants = true,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Position = UDim2.new(1, 0, 0, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                        },
+                                                                                        Reference = 133,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Name = "ClippingRegion_Special",
+                                                                                    BackgroundTransparency = 1,
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 132,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment2_End",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0, 120),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 84, 0, 120),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 131,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 143,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            BackgroundTransparency = 0.5,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(2, -12, 2, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                                        },
+                                                                                        Reference = 142,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                    Name = "ClippingRegion",
+                                                                                    Size = UDim2.new(1, 24, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 141,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment5",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 0, 0, 480),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 60, 0, 60),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 140,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Children = {
+                                                                                            {
+                                                                                                Properties = {
+                                                                                                    CornerRadius = UDim.new(0.5, 0)
+                                                                                                },
+                                                                                                Reference = 139,
+                                                                                                ClassName = "UICorner"
+                                                                                            }
+                                                                                        },
+                                                                                        Properties = {
+                                                                                            BackgroundTransparency = 0.5,
+                                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                                            Size = UDim2.new(2, -12, 1, 0),
+                                                                                            BorderSizePixel = 0,
+                                                                                            BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                                        },
+                                                                                        Reference = 138,
+                                                                                        ClassName = "Frame"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    ClipsDescendants = true,
+                                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                                    AnchorPoint = Vector2.new(1, 0),
+                                                                                    BackgroundTransparency = 1,
+                                                                                    Position = UDim2.new(1, 0, 0, 0),
+                                                                                    Name = "ClippingRegion",
+                                                                                    Size = UDim2.new(1, 24, 1, 0),
+                                                                                    BorderSizePixel = 0,
+                                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 137,
+                                                                                ClassName = "Frame"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            Name = "Segment3",
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0, 0, 0, 240),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 60, 0, 120),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 136,
+                                                                        ClassName = "Frame"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                    Name = "MiddleJoinsContainer3",
+                                                                    BackgroundTransparency = 1,
+                                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                    Size = UDim2.new(0, 120, 0, 600),
+                                                                    ZIndex = 3,
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 126,
+                                                                ClassName = "Frame"
+                                                            },
+                                                            {
+                                                                Properties = {
+                                                                    AnchorPoint = Vector2.new(0, 1),
+                                                                    Name = "Barrier5",
+                                                                    Position = UDim2.new(0.5, 0, 1, 0),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 84, 0, 60),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(0.1921568661928177, 0.1921568661928177, 0.1921568661928177)
+                                                                },
+                                                                Reference = 151,
+                                                                ClassName = "Frame"
+                                                            }
+                                                        },
+                                                        Properties = {
+                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                            Size = UDim2.new(0, 800, 0, 480),
+                                                            Name = "Background",
+                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                            ZIndex = 0,
+                                                            BorderSizePixel = 0,
+                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                        },
+                                                        Reference = 78,
+                                                        ClassName = "CanvasGroup"
+                                                    }
+                                                },
+                                                Properties = {
+                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                    Name = "Login",
+                                                    BackgroundTransparency = 1,
+                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                    BorderSizePixel = 0,
+                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                },
+                                                Reference = 77,
+                                                ClassName = "Frame"
+                                            },
+                                            {
+                                                Children = {
+                                                    {
+                                                        Children = {
+                                                            {
+                                                                Properties = {
+                                                                    FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
+                                                                    TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Text = "<b>Demonic</b> Hub",
+                                                                    Name = "Title",
+                                                                    Size = UDim2.new(0, 160, 0, 50),
+                                                                    Position = UDim2.new(0, 60, 0, 0),
+                                                                    BackgroundTransparency = 1,
+                                                                    TextXAlignment = Enum.TextXAlignment.Left,
+                                                                    BorderSizePixel = 0,
+                                                                    RichText = true,
+                                                                    TextSize = 24,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 54,
+                                                                ClassName = "TextLabel"
+                                                            },
+                                                            {
+                                                                Properties = {
+                                                                    Image = "rbxassetid://16755289922",
+                                                                    BackgroundTransparency = 1,
+                                                                    Name = "Logo",
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 60, 0, 60),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 55,
+                                                                ClassName = "ImageLabel"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Reference = 53,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
+                                                                            TextColor3 = Color3.new(0.5411764979362488, 0.5411764979362488, 0.5411764979362488),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Text = "V2",
+                                                                            Name = "V2Label",
+                                                                            BackgroundTransparency = 0.75,
+                                                                            Position = UDim2.new(0, 0, 0, 10),
+                                                                            Size = UDim2.new(0, 40, 0, 30),
+                                                                            BorderSizePixel = 0,
+                                                                            TextSize = 24,
+                                                                            BackgroundColor3 = Color3.new(0, 0, 0)
+                                                                        },
+                                                                        Reference = 52,
+                                                                        ClassName = "TextLabel"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    Name = "V2LabelContainer",
+                                                                    BackgroundTransparency = 1,
+                                                                    Position = UDim2.new(0, 220, 0, 0),
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 40, 0, 50),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 51,
+                                                                ClassName = "Frame"
+                                                            }
+                                                        },
+                                                        Properties = {
+                                                            Name = "LogoTitle",
+                                                            BackgroundTransparency = 1,
+                                                            Size = UDim2.new(1, 0, 0, 60),
+                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                            ZIndex = 2,
+                                                            BorderSizePixel = 0,
+                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                        },
+                                                        Reference = 50,
+                                                        ClassName = "Frame"
+                                                    },
+                                                    {
+                                                        Properties = {
+                                                            ClipsDescendants = true,
+                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                            Name = "WindowGrip",
+                                                            BackgroundTransparency = 1,
+                                                            Size = UDim2.new(1, 0, 0, 70),
+                                                            Selectable = false,
+                                                            Active = false,
+                                                            BorderSizePixel = 0,
+                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                        },
+                                                        Reference = 56,
+                                                        ClassName = "ImageButton"
+                                                    },
+                                                    {
+                                                        Children = {
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Rotation = 90,
+                                                                                            Transparency = NumberSequence.new({
+                                                                                                NumberSequenceKeypoint.new(0, 1, 0),
+                                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
+                                                                                                NumberSequenceKeypoint.new(1, 1, 0)
+                                                                                            }),
+                                                                                            Color = ColorSequence.new({
+                                                                                                ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
+                                                                                                ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
+                                                                                                ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
+                                                                                            })
+                                                                                        },
+                                                                                        Reference = 30,
+                                                                                        ClassName = "UIGradient"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Thickness = 20,
+                                                                                    Name = "Shadow",
+                                                                                    Color = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 29,
+                                                                                ClassName = "UIStroke"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                            SizeConstraint = Enum.SizeConstraint.RelativeYY,
+                                                                            Name = "Highlight",
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 28,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0, 4)
+                                                                                },
+                                                                                Reference = 27,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                            Size = UDim2.new(0, 22, 0, 2),
+                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Rotation = -45,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                        },
+                                                                        Reference = 26,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Properties = {
+                                                                            Color = Color3.new(1, 1, 1),
+                                                                            Transparency = 0.949999988079071
+                                                                        },
+                                                                        Reference = 25,
+                                                                        ClassName = "UIStroke"
+                                                                    },
+                                                                    {
+                                                                        Reference = 24,
+                                                                        ClassName = "UICorner"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    Name = "Minimize",
+                                                                    BackgroundTransparency = 0.800000011920929,
+                                                                    ClipsDescendants = true,
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 30, 0, 30),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(0.2313725501298904, 0.2313725501298904, 0.2313725501298904)
+                                                                },
+                                                                Reference = 23,
+                                                                ClassName = "ImageButton"
+                                                            },
+                                                            {
+                                                                Properties = {
+                                                                    Padding = UDim.new(0, 5),
+                                                                    SortOrder = Enum.SortOrder.LayoutOrder,
+                                                                    FillDirection = Enum.FillDirection.Horizontal
+                                                                },
+                                                                Reference = 22,
+                                                                ClassName = "UIListLayout"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    Color = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127),
+                                                                                    Thickness = 2
+                                                                                },
+                                                                                Reference = 36,
+                                                                                ClassName = "UIStroke"
+                                                                            },
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0, 4)
+                                                                                },
+                                                                                Reference = 35,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Size = UDim2.new(0, 16, 0, 16),
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(0.529411792755127, 0.529411792755127, 0.529411792755127)
+                                                                        },
+                                                                        Reference = 34,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Rotation = 90,
+                                                                                            Transparency = NumberSequence.new({
+                                                                                                NumberSequenceKeypoint.new(0, 1, 0),
+                                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
+                                                                                                NumberSequenceKeypoint.new(1, 1, 0)
+                                                                                            }),
+                                                                                            Color = ColorSequence.new({
+                                                                                                ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
+                                                                                                ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
+                                                                                                ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
+                                                                                            })
+                                                                                        },
+                                                                                        Reference = 39,
+                                                                                        ClassName = "UIGradient"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Thickness = 20,
+                                                                                    Name = "Shadow",
+                                                                                    Color = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 38,
+                                                                                ClassName = "UIStroke"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                            SizeConstraint = Enum.SizeConstraint.RelativeYY,
+                                                                            Name = "Highlight",
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 37,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Properties = {
+                                                                            Color = Color3.new(1, 1, 1),
+                                                                            Transparency = 0.949999988079071
+                                                                        },
+                                                                        Reference = 33,
+                                                                        ClassName = "UIStroke"
+                                                                    },
+                                                                    {
+                                                                        Reference = 32,
+                                                                        ClassName = "UICorner"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    LayoutOrder = 1,
+                                                                    Name = "Maximize",
+                                                                    BackgroundTransparency = 0.800000011920929,
+                                                                    ClipsDescendants = true,
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 30, 0, 30),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(0.2313725501298904, 0.2313725501298904, 0.2313725501298904)
+                                                                },
+                                                                Reference = 31,
+                                                                ClassName = "ImageButton"
+                                                            },
+                                                            {
+                                                                Children = {
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0, 4)
+                                                                                },
+                                                                                Reference = 46,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                            Size = UDim2.new(0, 22, 0, 2),
+                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Rotation = -45,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.3137255012989044, 0.4392156898975372)
+                                                                        },
+                                                                        Reference = 45,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Children = {
+                                                                                    {
+                                                                                        Properties = {
+                                                                                            Rotation = 90,
+                                                                                            Transparency = NumberSequence.new({
+                                                                                                NumberSequenceKeypoint.new(0, 1, 0),
+                                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                NumberSequenceKeypoint.new(0.5, 1, 0),
+                                                                                                NumberSequenceKeypoint.new(0.5, 0.8600000143051147, 0),
+                                                                                                NumberSequenceKeypoint.new(1, 1, 0)
+                                                                                            }),
+                                                                                            Color = ColorSequence.new({
+                                                                                                ColorSequenceKeypoint.new(0, Color3.new(0, 0.8352941274642944, 1)),
+                                                                                                ColorSequenceKeypoint.new(0.5, Color3.new(0.95686274766922, 1, 0.8509804010391235)),
+                                                                                                ColorSequenceKeypoint.new(1, Color3.new(0.843137264251709, 0.3764705955982208, 1))
+                                                                                            })
+                                                                                        },
+                                                                                        Reference = 49,
+                                                                                        ClassName = "UIGradient"
+                                                                                    }
+                                                                                },
+                                                                                Properties = {
+                                                                                    Thickness = 20,
+                                                                                    Name = "Shadow",
+                                                                                    Color = Color3.new(1, 1, 1)
+                                                                                },
+                                                                                Reference = 48,
+                                                                                ClassName = "UIStroke"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                            BackgroundTransparency = 1,
+                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                            SizeConstraint = Enum.SizeConstraint.RelativeYY,
+                                                                            Name = "Highlight",
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                        },
+                                                                        Reference = 47,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Children = {
+                                                                            {
+                                                                                Properties = {
+                                                                                    CornerRadius = UDim.new(0, 4)
+                                                                                },
+                                                                                Reference = 44,
+                                                                                ClassName = "UICorner"
+                                                                            }
+                                                                        },
+                                                                        Properties = {
+                                                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                                                            Size = UDim2.new(0, 22, 0, 2),
+                                                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                                            Rotation = 45,
+                                                                            BorderSizePixel = 0,
+                                                                            BackgroundColor3 = Color3.new(1, 0.3137255012989044, 0.4392156898975372)
+                                                                        },
+                                                                        Reference = 43,
+                                                                        ClassName = "Frame"
+                                                                    },
+                                                                    {
+                                                                        Reference = 41,
+                                                                        ClassName = "UICorner"
+                                                                    },
+                                                                    {
+                                                                        Properties = {
+                                                                            Color = Color3.new(1, 0.2392157018184662, 0.2392157018184662),
+                                                                            Transparency = 0.8500000238418579
+                                                                        },
+                                                                        Reference = 42,
+                                                                        ClassName = "UIStroke"
+                                                                    }
+                                                                },
+                                                                Properties = {
+                                                                    LayoutOrder = 2,
+                                                                    Name = "Close",
+                                                                    BackgroundTransparency = 0.5,
+                                                                    ClipsDescendants = true,
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Size = UDim2.new(0, 30, 0, 30),
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(0.2313725501298904, 0.1333333402872086, 0.1607843190431595)
+                                                                },
+                                                                Reference = 40,
+                                                                ClassName = "ImageButton"
+                                                            }
+                                                        },
+                                                        Properties = {
+                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                            AnchorPoint = Vector2.new(1, 0),
+                                                            Name = "WindowControls",
+                                                            BackgroundTransparency = 1,
+                                                            Position = UDim2.new(1, -10, 0, 10),
+                                                            Size = UDim2.new(0, 100, 0, 30),
+                                                            ZIndex = 2,
+                                                            BorderSizePixel = 0,
+                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                        },
+                                                        Reference = 21,
+                                                        ClassName = "Frame"
+                                                    },
+                                                    {
+                                                        Children = {
+                                                            {
+                                                                Properties = {
+                                                                    ScaleType = Enum.ScaleType.Tile,
+                                                                    ImageTransparency = 0.9929999709129333,
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Name = "Checker1",
+                                                                    Image = "rbxasset://textures/blockUpperLeft.png",
+                                                                    TileSize = UDim2.new(0, 46, 0, 46),
+                                                                    Size = UDim2.new(1, 0, 0, 69),
+                                                                    ResampleMode = Enum.ResamplerMode.Pixelated,
+                                                                    BackgroundTransparency = 1,
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 19,
+                                                                ClassName = "ImageLabel"
+                                                            },
+                                                            {
+                                                                Properties = {
+                                                                    ScaleType = Enum.ScaleType.Tile,
+                                                                    ImageTransparency = 0.9929999709129333,
+                                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                                    Name = "Checker2",
+                                                                    Size = UDim2.new(1, -23, 0, 23),
+                                                                    Image = "rbxasset://textures/blockUpperLeft.png",
+                                                                    TileSize = UDim2.new(0, 46, 0, 46),
+                                                                    Position = UDim2.new(0, 23, 0, 23),
+                                                                    ResampleMode = Enum.ResamplerMode.Pixelated,
+                                                                    BackgroundTransparency = 1,
+                                                                    BorderSizePixel = 0,
+                                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                                },
+                                                                Reference = 20,
+                                                                ClassName = "ImageLabel"
+                                                            }
+                                                        },
+                                                        Properties = {
+                                                            Name = "CheckerboardContainer",
+                                                            Size = UDim2.new(1, 0, 0, 70),
+                                                            BackgroundTransparency = 1,
+                                                            Position = UDim2.new(0, 0, 0, 1),
+                                                            BorderColor3 = Color3.new(0, 0, 0),
+                                                            ZIndex = -10,
+                                                            BorderSizePixel = 0,
+                                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                                        },
+                                                        Reference = 18,
+                                                        ClassName = "Frame"
+                                                    }
+                                                },
+                                                Properties = {
+                                                    BorderColor3 = Color3.new(0, 0, 0),
+                                                    AnchorPoint = Vector2.new(0.5, 0.5),
+                                                    Name = "TopBar",
+                                                    BackgroundTransparency = 1,
+                                                    Position = UDim2.new(0.5, 0, 0.5, 0),
+                                                    Size = UDim2.new(1, 0, 1, 0),
+                                                    ZIndex = 2,
+                                                    BorderSizePixel = 0,
+                                                    BackgroundColor3 = Color3.new(1, 1, 1)
+                                                },
+                                                Reference = 17,
+                                                ClassName = "Frame"
+                                            }
+                                        },
+                                        Properties = {
+                                            AnchorPoint = Vector2.new(0.5, 0.5),
+                                            Name = "Window",
+                                            BackgroundTransparency = 1,
+                                            Position = UDim2.new(0.5, 0, 0.5, 0),
+                                            BorderColor3 = Color3.new(0, 0, 0),
+                                            Size = UDim2.new(0, 800, 0, 480),
+                                            BorderSizePixel = 0,
+                                            BackgroundColor3 = Color3.new(1, 1, 1)
+                                        },
+                                        Reference = 16,
+                                        ClassName = "Frame"
+                                    }
+                                }
+                            }
+                        },
+                        Properties = {
+                            CanQuery = false,
+                            CanCollide = false,
+                            Anchored = true,
+                            CanTouch = false,
+                            Transparency = 1,
+                            Name = "DemonicHub_Renderer",
+                            Massless = true,
+                            Locked = true,
+                            Material = Enum.Material.SmoothPlastic,
+                            CastShadow = false,
+                            size = Vector3.new(0.2000000029802322, 0.2000000029802322, 0.2000000029802322)
+                        },
+                        Reference = 14,
+                        ClassName = "Part"
                     }
                 },
                 Properties = {
-                    Name = "DemonicHub_ScreenElements",
+                    ResetOnSpawn = false,
+                    Name = "DemonicHub",
                     ZIndexBehavior = Enum.ZIndexBehavior.Sibling
                 },
-                Reference = 338,
+                Reference = 2,
                 ClassName = "ScreenGui"
             }
         },
