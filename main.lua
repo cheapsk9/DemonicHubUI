@@ -4,6 +4,7 @@ local ModuleRoot = {
     {
         Closure = function() local KEY_LINK = "https://pandadevelopment.cloud/startkey.html?service=demonichubv2"
 local DISCORD_INVITE = "dsc.gg/demonichubv2"
+local ServiceID = "demonichubv2"
 
 local GuiOfChoice
 
@@ -287,7 +288,7 @@ You can select the following text below and copy it:
 		GUI:Destroy()
 		Renderer:Destroy()
 		Screen:Destroy()
-		KEY_LINK, DISCORD_INVITE, GuiOfChoice, GuiSize, Cam, GUI, ModalContainer, ModalTitleText, ModalBodyText, ModalCancelButton, ModalCopyBox, Screen, Pos, TaskButton, TweenService, Renderer, Screen, GuiRenderEvent, InputChangedEvent, InputEndedEvent, OnTopUnsetEvent, SetOnTop, guiFullTween, guiHalfTween, guiEnterFullTween, guiEnterHalfTween, guiExitTween, canvasFullTween, canvasMinTween, isDraggingGui, isDraggingTask, isWindowSmall, prevGuiPos, initMousePos, taskClickIntent, isClosing, lastGuiPos, lastTaskPos, dragInputObject, isInitDragInput, CursorChangedSignal, cleanupHub, main = nil
+		KEY_LINK, DISCORD_INVITE, ServiceID, GuiOfChoice, GuiSize, Cam, GUI, ModalContainer, ModalTitleText, ModalBodyText, ModalCancelButton, ModalCopyBox, Screen, Pos, TaskButton, TweenService, Renderer, Screen, GuiRenderEvent, InputChangedEvent, InputEndedEvent, OnTopUnsetEvent, SetOnTop, guiFullTween, guiHalfTween, guiEnterFullTween, guiEnterHalfTween, guiExitTween, canvasFullTween, canvasMinTween, isDraggingGui, isDraggingTask, isWindowSmall, prevGuiPos, initMousePos, taskClickIntent, isClosing, lastGuiPos, lastTaskPos, dragInputObject, isInitDragInput, PandaAuth, CursorChangedSignal, cleanupHub, main = nil
 		script:Destroy()
 		script.Disabled = true
 		script = nil
