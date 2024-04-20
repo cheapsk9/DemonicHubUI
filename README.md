@@ -48,7 +48,7 @@ Sets whether the window is minimized.
 **SetWindowSmall** (small: __bool__, transition: __bool__) : __void__  
 Sets whether the window is small (50%) or normal (100%) size.
 
-**OpenWindow** (transition: __bool__) : __void__
+**OpenWindow** (transition: __bool__) : __void__  
 Opens the window, showing the visible content.
 
 **CloseWindow** (transition: __bool__) : __void__  
