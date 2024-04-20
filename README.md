@@ -37,7 +37,7 @@ Whether the window is currently small (50%) or normal (100%) size. Ignores playi
 By default, the key UI is not visible. When set, it will determine if the key UI is visible within the window.
 
 **DestroyKeyUI** () : __void__  
-Removes (calls :Destroy() on) the key UI. Use when the key UI is no longer needed.
+Removes (calls :Destroy() on) the key UI, freeing it from memory. Use when the key UI is no longer needed.
 
 **ShowMessage** (title: __string__, text: __string__) : __void__  
 Displays a message within the window.
