@@ -14,6 +14,7 @@ UI.LoginRequest:Connect(function(key)
     if key == "secret" then
         -- success!
         print(success)
+        -- For now, we will use CloseWindow until we implement the rest of the hub
         UI:CloseWindow()
         proceed() -- proceed with whatever
     else
