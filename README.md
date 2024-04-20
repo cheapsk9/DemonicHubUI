@@ -25,35 +25,41 @@ end)
 ```
 `test` ```testy``` `test`
 
+# Window
+
 ## Properties
-**WindowIsMinimized** : __bool__  
+**IsMinimized** : __bool__  
 Whether the window is currently minimized. Ignores playing transitions.
 
-**WindowIsSmall** :  __bool__  
+**IsSmall** :  __bool__  
 Whether the window is currently small (50%) or normal (100%) size. Ignores playing transitions.
 
 ## Methods
-**SetKeyUIVisible** (visible: __bool__) : **void**  
-By default, the key UI is not visible. When set, it will determine if the key UI is visible within the window.
-
-**DestroyKeyUI** () : __void__  
-Removes (calls :Destroy() on) the key UI, freeing it from memory. Use when the key UI is no longer needed.
 
 **ShowMessage** (title: __string__, text: __string__) : __void__  
 Displays a message within the window.
 
-**SetWindowMinimized** (minimized: __bool__, transition: __bool__) : __void__  
+**SetMinimized** (minimized: __bool__, transition: __bool__) : __void__  
 Sets whether the window is minimized.
 
-**SetWindowSmall** (small: __bool__, transition: __bool__) : __void__  
+**SetSmall** (small: __bool__, transition: __bool__) : __void__  
 Sets whether the window is small (50%) or normal (100%) size.
 
-**OpenWindow** (transition: __bool__) : __void__  
+**Open** (transition: __bool__) : __void__  
 Opens the window, showing the visible content.
 
-**CloseWindow** (transition: __bool__) : __void__  
+**Close** (transition: __bool__) : __void__  
 Forces the window to close and cleans up everything.
+
+# Login
+
+## Methods
+**SetVisible** (visible: __bool__) : **void**  
+By default, the login UI is not visible. When set, it will determine if the login UI is visible within the window.
+
+**Destroy** () : __void__  
+Removes (calls :Destroy() on) the login UI, freeing it from memory. Use when the login UI is no longer needed.
 
 ## Events
 **LoginRequest** (key: __string__) : __RBXScriptSignal__  
-Fires when the user enters the key in the key UI.
+Fires when the user enters the key in the login UI.
