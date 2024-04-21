@@ -243,6 +243,11 @@ Gui.Window.Login.MainContent.Right.LoginMain.LoginBox.Help.MouseButton1Click:Con
 end)
 
 Gui.Window.Login.MainContent.Right.LoginMain.LoginBox.CopyKeyLink.MouseButton1Click:Connect(function()
+	isClosing = false
+	ModalTitleText.Text = "Link Copied!"
+	ModalBodyText.Text = "The key link was successfully copied to your clipboard!"
+	ModalCancelButton.Visible = false
+	ModalCopyBox.Visible = false
 	if setclipboard then
 		setclipboard(KEY_LINK)
 	elseif toclipboard then
@@ -252,16 +257,14 @@ Gui.Window.Login.MainContent.Right.LoginMain.LoginBox.CopyKeyLink.MouseButton1Cl
 	elseif CopyString then
 		CopyString(KEY_LINK)
 	else
-		isClosing = false
 		ModalTitleText.Text = "Copy Not Supported"
 		ModalBodyText.Text = [[Your executor does not support clipboard copy.
 You can select the following text below and copy it:
 ]]
 		ModalCopyBox.Text = KEY_LINK
-		ModalCancelButton.Visible = false
 		ModalCopyBox.Visible = true
-		ModalContainer.Visible = true
 	end
+	ModalContainer.Visible = true
 end)
 
 Gui.Window.Login.MainContent.Right.LoginMain.LoginBox.LogIn.MouseButton1Click:Connect(function()
