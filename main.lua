@@ -253,14 +253,31 @@ Gui.Window.Login.MainContent.Right.LoginMain.LoginBox.CopyKeyLink.MouseButton1Cl
 	ModalBodyText.Text = "The key link was successfully copied to your clipboard!"
 	ModalCancelButton.Visible = false
 	ModalCopyBox.Visible = false
+
 	if setclipboard then
-		setclipboard(KEY_LINK)
+		if isWhitelist then
+			setclipboard(WHITELIST_LINK)
+		else
+			setclipboard(KEY_LINK)
+		end
 	elseif toclipboard then
-		toclipboard(KEY_LINK)
+		if isWhitelist then
+			toclipboard(WHITELIST_LINK)
+		else
+			toclipboard(KEY_LINK)
+		end
 	elseif Clipboard and Clipboard.set then
-		Clipboard.set(KEY_LINK)
+		if isWhitelist then
+			Clipboard.set(WHITELIST_LINK)
+		else
+			Clipboard.set(KEY_LINK)
+		end
 	elseif CopyString then
-		CopyString(KEY_LINK)
+		if isWhitelist then
+			CopyString(WHITELIST_LINK)
+		else
+			CopyString(KEY_LINK)
+		end
 	else
 		ModalTitleText.Text = "Copy Not Supported"
 		ModalBodyText.Text = [[Your executor does not support clipboard copy.
